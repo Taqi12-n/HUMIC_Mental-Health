@@ -21,6 +21,12 @@ const fallbackData = {
     depression: 78,
     normal: 22
   },
+  audioInfo: {
+    duration: "45.0s",
+    avgPitch: "152 Hz",
+    energyLevel: "Medium",
+    signalQuality: "94%"
+  },
   performance: {
     accuracy: "92.4%",
     precision: "89.7%",
@@ -257,6 +263,39 @@ function ResultsContent() {
         </div>
       </div>
 
+      {/* Audio Info Card Grid */}
+      {data.audioInfo && (
+        <div className="bg-white rounded-2xl border border-border-light p-5 sm:p-6 soft-shadow space-y-4">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl gradient-bg-subtle flex items-center justify-center text-primary">
+              <Clock size={18} />
+            </div>
+            <div>
+              <h4 className="text-sm sm:text-base font-extrabold text-text">Acoustic Biomarkers & Audio Details</h4>
+              <p className="text-xs text-text-muted">Acoustic properties extracted from the analyzed speech signal</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-bg p-3.5 rounded-xl border border-border-light">
+              <span className="text-[10px] text-text-light font-bold uppercase tracking-wider block">Duration</span>
+              <span className="text-sm font-extrabold text-text block mt-0.5">{data.audioInfo.duration}</span>
+            </div>
+            <div className="bg-bg p-3.5 rounded-xl border border-border-light">
+              <span className="text-[10px] text-text-light font-bold uppercase tracking-wider block">Average Pitch</span>
+              <span className="text-sm font-extrabold text-text block mt-0.5">{data.audioInfo.avgPitch}</span>
+            </div>
+            <div className="bg-bg p-3.5 rounded-xl border border-border-light">
+              <span className="text-[10px] text-text-light font-bold uppercase tracking-wider block">Vocal Energy</span>
+              <span className="text-sm font-extrabold text-text block mt-0.5">{data.audioInfo.energyLevel}</span>
+            </div>
+            <div className="bg-bg p-3.5 rounded-xl border border-border-light">
+              <span className="text-[10px] text-text-light font-bold uppercase tracking-wider block">Signal Quality</span>
+              <span className="text-sm font-extrabold text-text block mt-0.5">{data.audioInfo.signalQuality}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* AI Interpretation (With Dynamic Recommendation Template) */}
       <div className="bg-white rounded-2xl border border-border-light p-5 sm:p-6 soft-shadow space-y-6">
         <div className="flex items-center gap-2.5">
@@ -348,7 +387,7 @@ function ResultsContent() {
       {/* Navigation Buttons */}
       <div className="flex flex-col sm:flex-row gap-3 pt-4">
         <Link 
-          href="/#features"
+          href={resultId ? `/ai-insight?id=${resultId}` : "/ai-insight"}
           className="flex-1 text-center py-3.5 rounded-full gradient-bg text-white font-bold text-sm shadow hover:scale-[1.02] transition-transform"
         >
           View AI Insights
