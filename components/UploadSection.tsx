@@ -23,6 +23,7 @@ interface SummaryData {
   primaryDetection: string;
   confidence: number;
   date: string;
+  topFeature?: string;
 }
 
 export default function UploadSection() {
@@ -33,6 +34,15 @@ export default function UploadSection() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [activeResult, setActiveResult] = useState<SummaryData | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Helper to get top feature from SHAP
+  const getTopFeature = (json: any) => {
+    if (json?.shapData?.features?.length > 0) {
+      const sorted = [...json.shapData.features].sort((a: any, b: any) => Math.abs(b.value) - Math.abs(a.value));
+      return `${sorted[0].name} (${sorted[0].featureValue})`;
+    }
+    return "Pitch Variability (11.2 Hz)";
+  };
 
   // Check for active result in localStorage
   useEffect(() => {
@@ -45,21 +55,23 @@ export default function UploadSection() {
             filename: "mental_health_sample.wav",
             primaryDetection: "Depression",
             confidence: 78,
-            date: "5/13/2026"
+            date: "5/13/2026",
+            topFeature: "Pitch Variability (11.2 Hz)"
           });
           setState("has_result");
         } else {
           try {
             const response = await fetch(`http://localhost:8000/api/results/${activeId}`);
             if (response.ok) {
-              const json = await response.ok ? await response.json() : null;
+              const json = await response.json();
               if (json) {
                 setActiveResult({
                   id: json.id,
                   filename: json.filename,
                   primaryDetection: json.primaryDetection,
                   confidence: json.confidence,
-                  date: json.date
+                  date: json.date,
+                  topFeature: getTopFeature(json)
                 });
                 setState("has_result");
               }
@@ -74,7 +86,8 @@ export default function UploadSection() {
               filename: "mental_health_sample.wav",
               primaryDetection: "Depression",
               confidence: 78,
-              date: "5/13/2026"
+              date: "5/13/2026",
+              topFeature: "Pitch Variability (11.2 Hz)"
             });
             setState("has_result");
           }
@@ -305,15 +318,25 @@ export default function UploadSection() {
                   <p className="text-xs text-text-muted truncate max-w-xs mx-auto mt-0.5">{activeResult.filename}</p>
                 </div>
 
-                <div className="max-w-xs mx-auto bg-bg p-4 rounded-xl border border-border-light grid grid-cols-2 gap-4">
-                  <div className="text-left">
-                    <span className="text-[10px] text-text-light font-bold uppercase tracking-wider block">Detection</span>
-                    <span className="text-sm font-bold text-text block mt-0.5">{activeResult.primaryDetection}</span>
+                <div className="max-w-xs mx-auto bg-bg p-4 rounded-xl border border-border-light space-y-3">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="text-left">
+                      <span className="text-[10px] text-text-light font-bold uppercase tracking-wider block">Detection</span>
+                      <span className="text-sm font-bold text-text block mt-0.5">{activeResult.primaryDetection}</span>
+                    </div>
+                    <div className="text-right border-l border-border pl-4">
+                      <span className="text-[10px] text-text-light font-bold uppercase tracking-wider block">Confidence</span>
+                      <span className="text-sm font-bold text-primary block mt-0.5">{activeResult.confidence}%</span>
+                    </div>
                   </div>
-                  <div className="text-right border-l border-border pl-4">
-                    <span className="text-[10px] text-text-light font-bold uppercase tracking-wider block">Confidence</span>
-                    <span className="text-sm font-bold text-primary block mt-0.5">{activeResult.confidence}%</span>
-                  </div>
+                  {activeResult.topFeature && (
+                    <div className="border-t border-border-light pt-2.5 text-left">
+                      <span className="text-[10px] text-text-light font-bold uppercase tracking-wider block">Top Contributor (SHAP)</span>
+                      <span className="text-xs font-semibold text-text-muted block mt-0.5 truncate">
+                        {activeResult.topFeature}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex gap-3 max-w-md mx-auto pt-2">

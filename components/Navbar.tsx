@@ -7,8 +7,8 @@ import Link from "next/link";
 
 const navItems = [
   { name: "Home", href: "/#home" },
-  { name: "Results", href: "/results" }, // will be dynamic
-  { name: "AI Insights", href: "/#features" },
+  { name: "Results", href: "/results" }, 
+  { name: "AI Insights", href: "/ai-insight" },
 ];
 
 export default function Navbar() {
@@ -37,6 +37,10 @@ export default function Navbar() {
 
   const getResultsHref = () => {
     return activeId ? `/results?id=${activeId}` : "/results";
+  };
+
+  const getAiInsightHref = () => {
+    return activeId ? `/ai-insight?id=${activeId}` : "/ai-insight";
   };
 
   return (
@@ -70,7 +74,12 @@ export default function Navbar() {
           {/* Desktop Menu */}
           <div className="hidden md:flex items-center gap-1">
             {navItems.map((item) => {
-              const href = item.name === "Results" ? getResultsHref() : item.href;
+              const href = 
+                item.name === "Results" 
+                  ? getResultsHref() 
+                  : item.name === "AI Insights" 
+                    ? getAiInsightHref() 
+                    : item.href;
               return (
                 <Link
                   key={item.name}
@@ -105,7 +114,12 @@ export default function Navbar() {
             className="md:hidden pb-4 space-y-1"
           >
             {navItems.map((item) => {
-              const href = item.name === "Results" ? getResultsHref() : item.href;
+              const href = 
+                item.name === "Results" 
+                  ? getResultsHref() 
+                  : item.name === "AI Insights" 
+                    ? getAiInsightHref() 
+                    : item.href;
               return (
                 <Link
                   key={item.name}
