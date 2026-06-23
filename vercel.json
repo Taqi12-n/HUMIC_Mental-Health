@@ -9,6 +9,7 @@
       "root": "backend",
       "routePrefix": "/_backend",
       "entrypoint": "main.py",
+      "builder": "@vercel/python",
       "runtime": "python3.11"
     }
   }
