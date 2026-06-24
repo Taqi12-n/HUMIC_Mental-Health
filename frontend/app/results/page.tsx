@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { 
@@ -8,6 +8,7 @@ import {
   RefreshCw, Info 
 } from "lucide-react";
 import Link from "next/link";
+import { getApiUrl } from "@/utils/api";
 
 // Mockup data matching reference specifications
 const fallbackData = {
@@ -39,25 +40,35 @@ function ResultsContent() {
   const router = useRouter();
   const resultId = searchParams.get("id");
 
-  const [data, setData] = useState(fallbackData);
+  const [data, setData] = useState<any>(fallbackData);
   const [loading, setLoading] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(15.0); // starts at 15.0s to match mockup
-  const totalDuration = 45.0; // seconds
+  const [currentTime, setCurrentTime] = useState(0.0);
+  const [totalDuration, setTotalDuration] = useState(45.0);
+  const [waveformPeaks, setWaveformPeaks] = useState<number[]>([]);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Fetch results from backend
   useEffect(() => {
-    if (!resultId) {
-      setLoading(false);
+    const activeId = resultId || localStorage.getItem("mindvoice_active_result_id");
+
+    if (!activeId) {
+      router.push("/#upload");
       return;
     }
 
     const fetchResult = async () => {
       try {
-        const response = await fetch(`http://localhost:8000/api/results/${resultId}`);
+        const response = await fetch(getApiUrl(`/api/results/${activeId}`));
         if (!response.ok) throw new Error("Result not found");
         const json = await response.json();
         setData(json);
+        if (json.audioInfo?.duration) {
+          const parsed = parseFloat(json.audioInfo.duration);
+          if (!isNaN(parsed)) {
+            setTotalDuration(parsed);
+          }
+        }
       } catch (err) {
         console.warn("Backend fetch failed, using fallback mock data.", err);
       } finally {
@@ -68,31 +79,83 @@ function ResultsContent() {
     fetchResult();
   }, [resultId]);
 
-  // Smooth audio player simulation (ticks every 50ms)
+  // Decode audio to extract waveform peaks dynamically
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isPlaying) {
-      interval = setInterval(() => {
-        setCurrentTime((prev) => {
-          if (prev >= totalDuration) {
-            setIsPlaying(false);
-            return 0.0;
-          }
-          return prev + 0.05; // 50ms tick
-        });
-      }, 500 / 10); // 50 milliseconds
+    if (loading) return;
+
+    const audioUrl = data.audioInfo?.audioUrl || getApiUrl(`/api/audio/${data.id}`);
+    
+    if (data.id === "fallback-mock-id") {
+      // Mock static peaks
+      const peaks = Array.from({ length: 64 }, (_, idx) => {
+        return Math.abs(Math.sin(idx * 0.15)) * 0.8 + 0.1;
+      });
+      setWaveformPeaks(peaks);
+      return;
     }
-    return () => clearInterval(interval);
-  }, [isPlaying]);
+
+    const loadWaveform = async () => {
+      try {
+        const response = await fetch(audioUrl);
+        if (!response.ok) throw new Error("Failed to fetch audio file");
+        const arrayBuffer = await response.arrayBuffer();
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        const audioCtx = new AudioContextClass();
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        
+        // Extract amplitude peaks
+        const rawData = audioBuffer.getChannelData(0);
+        const samples = 64;
+        const blockSize = Math.floor(rawData.length / samples);
+        const filteredData = [];
+        for (let i = 0; i < samples; i++) {
+          let blockStart = blockSize * i;
+          let sum = 0;
+          for (let j = 0; j < blockSize; j++) {
+            sum += Math.abs(rawData[blockStart + j]);
+          }
+          filteredData.push(sum / blockSize);
+        }
+        
+        // Normalize
+        const max = Math.max(...filteredData) || 1;
+        const normalized = filteredData.map(val => (val / max) * 0.8 + 0.15);
+        setWaveformPeaks(normalized);
+      } catch (err) {
+        console.warn("Could not decode audio data for waveform, generating seed-based peaks", err);
+        const peaks = Array.from({ length: 64 }, (_, idx) => {
+          const seed = data.id.split("").reduce((acc: number, char: string) => acc + char.charCodeAt(0), 0);
+          return Math.abs(Math.sin(idx * 0.1 + seed)) * 0.75 + 0.15;
+        });
+        setWaveformPeaks(peaks);
+      }
+    };
+    
+    loadWaveform();
+  }, [data, loading]);
 
   const handlePlayToggle = () => {
-    setIsPlaying(!isPlaying);
+    if (!audioRef.current) return;
+    if (isPlaying) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      audioRef.current.play().then(() => {
+        setIsPlaying(true);
+      }).catch(err => {
+        console.error("Audio play failed", err);
+      });
+    }
   };
 
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const nextVal = parseFloat(e.target.value);
     setCurrentTime(nextVal);
+    if (audioRef.current) {
+      audioRef.current.currentTime = nextVal;
+    }
   };
+
   const handleAnalyzeAnother = () => {
     localStorage.removeItem("mindvoice_active_result_id");
     window.dispatchEvent(new Event("storage"));
@@ -106,7 +169,7 @@ function ResultsContent() {
     return `${minutes}:${seconds < 10 ? "0" : ""}${seconds}`;
   };
 
-  const playProgress = currentTime / totalDuration;
+  const playProgress = totalDuration > 0 ? currentTime / totalDuration : 0;
 
   if (loading) {
     return (
@@ -144,7 +207,7 @@ function ResultsContent() {
   }
 
   return (
-    <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 py-6 sm:py-10 space-y-6 sm:space-y-8">
+    <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-10 space-y-6 sm:space-y-8">
       {/* Header */}
       <div>
         <div className="flex items-center gap-2 text-xs font-semibold text-text-muted mb-2">
@@ -332,17 +395,37 @@ function ResultsContent() {
         </div>
       </div>
 
-      {/* Audio Waveform Controller (Smoother progress updates) */}
+      {/* Audio Waveform Controller (Real audio playback & dynamic visualization) */}
       <div className="bg-white rounded-2xl border border-border-light p-5 sm:p-6 soft-shadow space-y-6">
         <div className="flex items-center justify-between pb-3 border-b border-border-light">
           <h4 className="text-sm sm:text-base font-extrabold text-text">Audio Waveform</h4>
           <span className="text-xs font-medium text-text-muted">{data.filename}</span>
         </div>
 
+        {/* Hidden Audio element */}
+        <audio 
+          ref={audioRef}
+          src={data.audioInfo?.audioUrl || getApiUrl(`/api/audio/${data.id}`)}
+          onTimeUpdate={() => {
+            if (audioRef.current) {
+              setCurrentTime(audioRef.current.currentTime);
+            }
+          }}
+          onLoadedMetadata={() => {
+            if (audioRef.current) {
+              setTotalDuration(audioRef.current.duration || 45.0);
+            }
+          }}
+          onEnded={() => {
+            setIsPlaying(false);
+            setCurrentTime(0);
+          }}
+        />
+
         {/* Waveform Visualization */}
         <div className="bg-bg rounded-xl p-4 flex items-end justify-between h-20 gap-[2px] select-none">
-          {Array.from({ length: 64 }).map((_, idx) => {
-            const h = Math.abs(Math.sin(idx * 0.15)) * 80 + 10;
+          {(waveformPeaks.length > 0 ? waveformPeaks : Array.from({ length: 64 }).map(() => 0.15)).map((peak, idx) => {
+            const h = peak * 90; // scale to max 90%
             // Calculate if the current bar has been "played"
             const isPlayed = idx / 64 < playProgress;
             return (
@@ -387,7 +470,7 @@ function ResultsContent() {
       {/* Navigation Buttons */}
       <div className="flex flex-col sm:flex-row gap-3 pt-4">
         <Link 
-          href={resultId ? `/ai-insight?id=${resultId}` : "/ai-insight"}
+          href={(resultId || data?.id) ? `/ai-insight?id=${resultId || data?.id}` : "/ai-insight"}
           className="flex-1 text-center py-3.5 rounded-full gradient-bg text-white font-bold text-sm shadow hover:scale-[1.02] transition-transform"
         >
           View AI Insights
@@ -404,11 +487,18 @@ function ResultsContent() {
 }
 
 export default function ResultsPage() {
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const id = localStorage.getItem("mindvoice_active_result_id");
+    setActiveId(id);
+  }, []);
+
   return (
     <>
       {/* Sticky header matching landing navbar */}
       <nav className="fixed top-0 left-0 right-0 z-50 glass-navbar shadow-sm border-b border-white/50 h-16 sm:h-20 flex items-center">
-        <div className="max-w-4xl mx-auto w-full px-4 sm:px-6 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-full gradient-bg flex items-center justify-center shadow-md">
               <div className="w-4 h-4 bg-white/30 rounded-full" />
@@ -425,8 +515,11 @@ export default function ResultsPage() {
             </Link>
             <span className="px-4 py-2 rounded-full text-xs sm:text-sm font-medium text-white gradient-bg shadow-sm">
               Results
-            </span >
-            <Link href="/#features" className="px-4 py-2 rounded-full text-xs sm:text-sm font-medium text-text-muted hover:text-text">
+            </span>
+            <Link 
+              href={activeId ? `/ai-insight?id=${activeId}` : "/ai-insight"} 
+              className="px-4 py-2 rounded-full text-xs sm:text-sm font-medium text-text-muted hover:text-text"
+            >
               AI Insights
             </Link>
           </div>

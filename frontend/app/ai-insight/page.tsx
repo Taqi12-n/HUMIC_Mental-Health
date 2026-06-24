@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 import { RefreshCw, Brain, Sparkles, ArrowRight, Home } from "lucide-react";
 import Link from "next/link";
 import XaiSection from "@/components/XaiSection";
+import { getApiUrl } from "@/utils/api";
 
 // Fallback mockup matching reference specifications
 const fallbackData = {
@@ -45,7 +46,7 @@ function AiInsightContent() {
     const activeId = resultId || localStorage.getItem("mindvoice_active_result_id");
 
     if (!activeId) {
-      setLoading(false);
+      router.push("/#upload");
       return;
     }
 
@@ -57,7 +58,7 @@ function AiInsightContent() {
 
     const fetchResult = async () => {
       try {
-        const response = await fetch(`http://localhost:8000/api/results/${activeId}`);
+        const response = await fetch(getApiUrl(`/api/results/${activeId}`));
         if (!response.ok) throw new Error("Result not found");
         const json = await response.json();
         setData(json);
@@ -109,7 +110,7 @@ function AiInsightContent() {
   }
 
   return (
-    <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 py-6 sm:py-10 space-y-6 sm:space-y-8">
+    <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-10 space-y-6 sm:space-y-8">
       {/* Page Title & Breadcrumbs */}
       <div>
         <div className="flex items-center gap-2 text-xs font-semibold text-text-muted mb-2">
@@ -157,11 +158,18 @@ function AiInsightContent() {
 }
 
 export default function AiInsightPage() {
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const id = localStorage.getItem("mindvoice_active_result_id");
+    setActiveId(id);
+  }, []);
+
   return (
     <>
       {/* Sticky header matching landing navbar */}
       <nav className="fixed top-0 left-0 right-0 z-50 glass-navbar shadow-sm border-b border-white/50 h-16 sm:h-20 flex items-center">
-        <div className="max-w-4xl mx-auto w-full px-4 sm:px-6 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-full gradient-bg flex items-center justify-center shadow-md">
               <div className="w-4 h-4 bg-white/30 rounded-full" />
@@ -176,7 +184,10 @@ export default function AiInsightPage() {
             <Link href="/" className="px-4 py-2 rounded-full text-xs sm:text-sm font-medium text-text-muted hover:text-text">
               Home
             </Link>
-            <Link href="/results" className="px-4 py-2 rounded-full text-xs sm:text-sm font-medium text-text-muted hover:text-text">
+            <Link 
+              href={activeId ? `/results?id=${activeId}` : "/results"} 
+              className="px-4 py-2 rounded-full text-xs sm:text-sm font-medium text-text-muted hover:text-text"
+            >
               Results
             </Link>
             <span className="px-4 py-2 rounded-full text-xs sm:text-sm font-medium text-white gradient-bg shadow-sm">
