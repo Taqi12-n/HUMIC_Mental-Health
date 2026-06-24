@@ -218,11 +218,11 @@ export default function XaiSection({ data }: XaiSectionProps) {
                 <div className="flex justify-center items-center gap-6 pt-3 text-[10px] sm:text-xs font-bold text-text-muted">
                   <div className="flex items-center gap-1.5">
                     <div className="w-3 h-3 rounded bg-green-500" />
-                    <span>Hijau = Normal</span>
+                    <span>Normal</span>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <div className="w-3 h-3 rounded bg-primary" />
-                    <span>Merah = Depresi</span>
+                    <span>Depression</span>
                   </div>
                 </div>
               </div>
