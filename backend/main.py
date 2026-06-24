@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 import uuid
 import datetime
@@ -7,6 +7,8 @@ import wave
 import io
 import random
 import os
+import json
+import sqlite3
 
 app = FastAPI(title="MindVoice AI Backend", version="1.0.0")
 
@@ -19,15 +21,181 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
-try:
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-except Exception:
-    UPLOAD_DIR = "/tmp/mindvoice_uploads"
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
+DATABASE_URL = os.getenv("DATABASE_URL")
+SQLITE_DB_PATH = os.getenv(
+    "SQLITE_DB_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "mindvoice.db"),
+)
 
-# In-memory database to store analysis results
+# Local fallback for development only. Production should use DATABASE_URL.
 results_db = {}
+audio_db = {}
+
+
+def is_postgres_enabled():
+    return bool(DATABASE_URL and DATABASE_URL.startswith(("postgres://", "postgresql://")))
+
+
+def get_media_type(filename):
+    _, ext = os.path.splitext(filename or "")
+    ext = ext.lower()
+    if ext == ".mp3":
+        return "audio/mpeg"
+    if ext == ".m4a":
+        return "audio/mp4"
+    if ext == ".ogg":
+        return "audio/ogg"
+    if ext == ".webm":
+        return "audio/webm"
+    return "audio/wav"
+
+
+def init_database():
+    if is_postgres_enabled():
+        import psycopg
+
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS analyses (
+                        id TEXT PRIMARY KEY,
+                        result_json JSONB NOT NULL,
+                        audio_bytes BYTEA NOT NULL,
+                        audio_filename TEXT,
+                        audio_media_type TEXT NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+        return
+
+    try:
+        with sqlite3.connect(SQLITE_DB_PATH) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS analyses (
+                    id TEXT PRIMARY KEY,
+                    result_json TEXT NOT NULL,
+                    audio_bytes BLOB NOT NULL,
+                    audio_filename TEXT,
+                    audio_media_type TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+    except Exception:
+        # Some serverless filesystems are read-only. Keep the app usable locally,
+        # but this fallback is not persistent and should not be used in production.
+        pass
+
+
+def save_analysis(result, audio_bytes, filename, media_type):
+    if is_postgres_enabled():
+        import psycopg
+        from psycopg.types.json import Jsonb
+
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO analyses (
+                        id, result_json, audio_bytes, audio_filename, audio_media_type
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        result_json = EXCLUDED.result_json,
+                        audio_bytes = EXCLUDED.audio_bytes,
+                        audio_filename = EXCLUDED.audio_filename,
+                        audio_media_type = EXCLUDED.audio_media_type
+                    """,
+                    (
+                        result["id"],
+                        Jsonb(result),
+                        audio_bytes,
+                        filename,
+                        media_type,
+                    ),
+                )
+        return
+
+    try:
+        with sqlite3.connect(SQLITE_DB_PATH) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO analyses (
+                    id, result_json, audio_bytes, audio_filename, audio_media_type, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    result["id"],
+                    json.dumps(result),
+                    sqlite3.Binary(audio_bytes),
+                    filename,
+                    media_type,
+                    datetime.datetime.now().isoformat(),
+                ),
+            )
+        return
+    except Exception:
+        results_db[result["id"]] = result
+        audio_db[result["id"]] = {
+            "bytes": audio_bytes,
+            "filename": filename,
+            "media_type": media_type,
+        }
+
+
+def get_analysis(result_id):
+    if is_postgres_enabled():
+        import psycopg
+
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT result_json FROM analyses WHERE id = %s", (result_id,))
+                row = cur.fetchone()
+        return row[0] if row else None
+
+    try:
+        with sqlite3.connect(SQLITE_DB_PATH) as conn:
+            cur = conn.execute("SELECT result_json FROM analyses WHERE id = ?", (result_id,))
+            row = cur.fetchone()
+        return json.loads(row[0]) if row else None
+    except Exception:
+        return results_db.get(result_id)
+
+
+def get_audio_record(result_id):
+    if is_postgres_enabled():
+        import psycopg
+
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT audio_bytes, audio_media_type FROM analyses WHERE id = %s",
+                    (result_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {"bytes": bytes(row[0]), "media_type": row[1]}
+
+    try:
+        with sqlite3.connect(SQLITE_DB_PATH) as conn:
+            cur = conn.execute(
+                "SELECT audio_bytes, audio_media_type FROM analyses WHERE id = ?",
+                (result_id,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {"bytes": row[0], "media_type": row[1]}
+    except Exception:
+        return audio_db.get(result_id)
+
+
+init_database()
 
 def get_wav_info(file_bytes):
     try:
@@ -50,18 +218,11 @@ async def analyze_audio(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not read uploaded file: {str(e)}")
 
-    # Save file to disk (non-fatal - skipped on read-only filesystems like Vercel)
     _, ext = os.path.splitext(file.filename or "")
     if not ext:
         ext = ".wav"
-    file_saved = False
-    try:
-        file_path = os.path.join(UPLOAD_DIR, f"{result_id}{ext}")
-        with open(file_path, "wb") as f:
-            f.write(content)
-        file_saved = True
-    except Exception:
-        pass  # Filesystem may be read-only in serverless environments
+    stored_filename = f"{result_id}{ext}"
+    media_type = get_media_type(stored_filename)
 
     # Get duration using built-in wave module or default to random
     duration = get_wav_info(content)
@@ -142,8 +303,7 @@ async def analyze_audio(file: UploadFile = File(...)):
             {"feature": "Spectral Centroid", "rule": "Centroid > 1600 Hz", "value": "1890 Hz", "weight": -0.09, "influence": "Negative (Normal)"}
         ]
 
-    # Save to memory db
-    results_db[result_id] = {
+    result = {
         "id": result_id,
         "filename": file.filename,
         "date": date_str,
@@ -159,7 +319,7 @@ async def analyze_audio(file: UploadFile = File(...)):
             "avgPitch": f"{avg_pitch} Hz",
             "energyLevel": energy_level,
             "signalQuality": f"{signal_quality}%",
-            "audioUrl": f"http://localhost:8000/api/audio/{result_id}"
+            "audioUrl": f"/api/audio/{result_id}"
         },
         "performance": {
             "accuracy": "92.4%",
@@ -173,30 +333,28 @@ async def analyze_audio(file: UploadFile = File(...)):
         },
         "limeRules": lime_rules
     }
+
+    save_analysis(result, content, file.filename or stored_filename, media_type)
     
     return {"id": result_id}
 
 @app.get("/api/results/{result_id}")
 async def get_result(result_id: str):
-    if result_id not in results_db:
+    result = get_analysis(result_id)
+    if not result:
         raise HTTPException(status_code=404, detail="Analysis result not found")
-    return results_db[result_id]
+    return result
 
 @app.get("/api/audio/{result_id}")
 async def get_audio(result_id: str):
-    if not os.path.exists(UPLOAD_DIR):
-        raise HTTPException(status_code=404, detail="Audio directory not found")
-    for filename in os.listdir(UPLOAD_DIR):
-        if filename.startswith(result_id):
-            file_path = os.path.join(UPLOAD_DIR, filename)
-            # Determine correct media type
-            _, ext = os.path.splitext(filename)
-            media_type = "audio/wav"
-            if ext.lower() == ".mp3":
-                media_type = "audio/mpeg"
-            elif ext.lower() == ".m4a":
-                media_type = "audio/mp4"
-            elif ext.lower() == ".ogg":
-                media_type = "audio/ogg"
-            return FileResponse(file_path, media_type=media_type)
-    raise HTTPException(status_code=404, detail="Audio file not found")
+    audio = get_audio_record(result_id)
+    if not audio:
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    return Response(
+        content=audio["bytes"],
+        media_type=audio["media_type"],
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, max-age=3600",
+        },
+    )

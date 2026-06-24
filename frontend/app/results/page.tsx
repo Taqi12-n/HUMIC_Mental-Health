@@ -35,6 +35,18 @@ const fallbackData = {
   }
 };
 
+type AudioResultData = {
+  id: string;
+  audioInfo?: {
+    audioUrl?: string;
+  };
+};
+
+const resolveAudioUrl = (data: AudioResultData) => {
+  const rawAudioUrl = data.audioInfo?.audioUrl || `/api/audio/${data.id}`;
+  return rawAudioUrl.startsWith("http") ? rawAudioUrl : getApiUrl(rawAudioUrl);
+};
+
 function ResultsContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -83,7 +95,7 @@ function ResultsContent() {
   useEffect(() => {
     if (loading) return;
 
-    const audioUrl = data.audioInfo?.audioUrl || getApiUrl(`/api/audio/${data.id}`);
+    const audioUrl = resolveAudioUrl(data);
     
     if (data.id === "fallback-mock-id") {
       // Mock static peaks
@@ -405,7 +417,7 @@ function ResultsContent() {
         {/* Hidden Audio element */}
         <audio 
           ref={audioRef}
-          src={data.audioInfo?.audioUrl || getApiUrl(`/api/audio/${data.id}`)}
+          src={resolveAudioUrl(data)}
           onTimeUpdate={() => {
             if (audioRef.current) {
               setCurrentTime(audioRef.current.currentTime);
