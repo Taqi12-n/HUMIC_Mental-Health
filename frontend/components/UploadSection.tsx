@@ -8,6 +8,7 @@ import {
   Loader2, Activity, ArrowRight, Trash2, Eye
 } from "lucide-react";
 import SectionContainer from "./SectionContainer";
+import { getApiUrl } from "../utils/api";
 
 const features = [
   { icon: CheckCircle, label: "High Quality", color: "text-green-500" },
@@ -61,7 +62,7 @@ export default function UploadSection() {
           setState("has_result");
         } else {
           try {
-            const response = await fetch(`http://localhost:8000/api/results/${activeId}`);
+            const response = await fetch(getApiUrl(`/api/results/${activeId}`));
             if (response.ok) {
               const json = await response.json();
               if (json) {
@@ -132,7 +133,7 @@ export default function UploadSection() {
     formData.append("file", file);
 
     try {
-      const response = await fetch("http://localhost:8000/api/analyze", {
+      const response = await fetch(getApiUrl("/api/analyze"), {
         method: "POST",
         body: formData,
       });

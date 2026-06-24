@@ -12,8 +12,12 @@
   ],
   "routes": [
     {
-      "src": "/_backend/(.*)",
-      "dest": "/backend/main.py/$1"
+      "src": "/_backend/api/(.*)",
+      "dest": "/backend/main.py/api/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/frontend/$1"
     }
   ]
 }

@@ -1,21 +1,30 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uuid
 import datetime
 import wave
 import io
 import random
+import os
 
 app = FastAPI(title="MindVoice AI Backend", version="1.0.0")
 
 # Enable CORS for Next.js frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+try:
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+except Exception:
+    UPLOAD_DIR = "/tmp/mindvoice_uploads"
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # In-memory database to store analysis results
 results_db = {}
@@ -33,18 +42,31 @@ def get_wav_info(file_bytes):
 
 @app.post("/api/analyze")
 async def analyze_audio(file: UploadFile = File(...)):
+    result_id = str(uuid.uuid4())
+    
     # Read file content
     try:
         content = await file.read()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not read uploaded file: {str(e)}")
 
+    # Save file to disk (non-fatal - skipped on read-only filesystems like Vercel)
+    _, ext = os.path.splitext(file.filename or "")
+    if not ext:
+        ext = ".wav"
+    file_saved = False
+    try:
+        file_path = os.path.join(UPLOAD_DIR, f"{result_id}{ext}")
+        with open(file_path, "wb") as f:
+            f.write(content)
+        file_saved = True
+    except Exception:
+        pass  # Filesystem may be read-only in serverless environments
+
     # Get duration using built-in wave module or default to random
     duration = get_wav_info(content)
     
     # Generate mock result matching 2 classifications: Depression & Normal State
-    result_id = str(uuid.uuid4())
-    
     primary_classes = ["Depression", "Normal State"]
     primary_detection = random.choice(primary_classes)
     
@@ -136,7 +158,8 @@ async def analyze_audio(file: UploadFile = File(...)):
             "duration": f"{duration}s",
             "avgPitch": f"{avg_pitch} Hz",
             "energyLevel": energy_level,
-            "signalQuality": f"{signal_quality}%"
+            "signalQuality": f"{signal_quality}%",
+            "audioUrl": f"http://localhost:8000/api/audio/{result_id}"
         },
         "performance": {
             "accuracy": "92.4%",
@@ -158,3 +181,22 @@ async def get_result(result_id: str):
     if result_id not in results_db:
         raise HTTPException(status_code=404, detail="Analysis result not found")
     return results_db[result_id]
+
+@app.get("/api/audio/{result_id}")
+async def get_audio(result_id: str):
+    if not os.path.exists(UPLOAD_DIR):
+        raise HTTPException(status_code=404, detail="Audio directory not found")
+    for filename in os.listdir(UPLOAD_DIR):
+        if filename.startswith(result_id):
+            file_path = os.path.join(UPLOAD_DIR, filename)
+            # Determine correct media type
+            _, ext = os.path.splitext(filename)
+            media_type = "audio/wav"
+            if ext.lower() == ".mp3":
+                media_type = "audio/mpeg"
+            elif ext.lower() == ".m4a":
+                media_type = "audio/mp4"
+            elif ext.lower() == ".ogg":
+                media_type = "audio/ogg"
+            return FileResponse(file_path, media_type=media_type)
+    raise HTTPException(status_code=404, detail="Audio file not found")
