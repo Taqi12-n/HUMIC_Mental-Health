@@ -42,3 +42,7 @@ next-env.d.ts
 
 node_modules/
 .next/
+
+backend/mindvoice.db
+*.db
+*.sqlite3

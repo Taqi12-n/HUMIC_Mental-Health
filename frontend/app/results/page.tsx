@@ -4,36 +4,11 @@ import { useState, useEffect, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { 
-  Activity, Play, Pause, Brain, Clock, Shield, AlertCircle, 
+  Activity, Play, Pause, Brain, Clock, AlertCircle, 
   RefreshCw, Info 
 } from "lucide-react";
 import Link from "next/link";
 import { getApiUrl } from "@/utils/api";
-
-// Mockup data matching reference specifications
-const fallbackData = {
-  id: "fallback-mock-id",
-  filename: "mental_health_sample.wav",
-  date: "5/13/2026",
-  timestamp: "5/13/2026, 11:02:50 PM",
-  primaryDetection: "Depression",
-  confidence: 78,
-  metrics: {
-    depression: 78,
-    normal: 22
-  },
-  audioInfo: {
-    duration: "45.0s",
-    avgPitch: "152 Hz",
-    energyLevel: "Medium",
-    signalQuality: "94%"
-  },
-  performance: {
-    accuracy: "92.4%",
-    precision: "89.7%",
-    f1Score: "90.8%"
-  }
-};
 
 type AudioResultData = {
   id: string;
@@ -52,7 +27,8 @@ function ResultsContent() {
   const router = useRouter();
   const resultId = searchParams.get("id");
 
-  const [data, setData] = useState<any>(fallbackData);
+  const [data, setData] = useState<any>(null);
+  const [resultError, setResultError] = useState("");
   const [loading, setLoading] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0.0);
@@ -65,6 +41,12 @@ function ResultsContent() {
     const activeId = resultId || localStorage.getItem("mindvoice_active_result_id");
 
     if (!activeId) {
+      router.push("/#upload");
+      return;
+    }
+
+    if (activeId === "fallback-mock-id") {
+      localStorage.removeItem("mindvoice_active_result_id");
       router.push("/#upload");
       return;
     }
@@ -82,7 +64,8 @@ function ResultsContent() {
           }
         }
       } catch (err) {
-        console.warn("Backend fetch failed, using fallback mock data.", err);
+        console.warn("Backend fetch failed.", err);
+        setResultError("Analysis result could not be loaded. Please upload and analyze the audio again.");
       } finally {
         setLoading(false);
       }
@@ -93,7 +76,7 @@ function ResultsContent() {
 
   // Decode audio to extract waveform peaks dynamically
   useEffect(() => {
-    if (loading) return;
+    if (loading || !data) return;
 
     const audioUrl = resolveAudioUrl(data);
     
@@ -192,6 +175,29 @@ function ResultsContent() {
     );
   }
 
+  if (!data) {
+    return (
+      <div className="min-h-screen bg-bg flex flex-col items-center justify-center p-4 text-center">
+        <div className="w-14 h-14 rounded-2xl bg-red-50 text-primary flex items-center justify-center mb-4">
+          <AlertCircle size={28} />
+        </div>
+        <h2 className="text-xl font-extrabold text-text mb-2">Analysis Result Unavailable</h2>
+        <p className="text-sm text-text-muted max-w-md leading-relaxed mb-6">
+          {resultError || "The analysis result could not be loaded. Please upload the audio again."}
+        </p>
+        <button
+          onClick={() => {
+            localStorage.removeItem("mindvoice_active_result_id");
+            router.push("/#upload");
+          }}
+          className="px-6 py-3 rounded-full gradient-bg text-white font-bold text-sm shadow hover:scale-[1.02] transition-transform"
+        >
+          Upload Again
+        </button>
+      </div>
+    );
+  }
+
   // Circular progress properties for perfect circle
   const radius = 58;
   const circumference = radius * 2 * Math.PI;
@@ -203,19 +209,51 @@ function ResultsContent() {
     ? { stroke: "#E91E63", text: "text-primary", bg: "bg-red-500" }
     : { stroke: "#10B981", text: "text-green-500", bg: "bg-green-500" };
 
-  // AI Interpretation dynamic text selection
+  // AI Interpretation dynamic text selection based on depression percentage
+  const depressionScore = Math.max(0, Math.min(100, Number(data.metrics?.depression ?? 0)));
   let recommendationTitle = "";
   let recommendationText = "";
 
-  if (data.metrics.normal >= 80) {
-    recommendationTitle = "Optimal Mental Well-being (Normal State)";
-    recommendationText = "The audio analysis indicates a healthy, calm, and stable emotional state with high confidence. Pitch variability and vocal energy levels are in the optimal range.\n\nRecommendations:\n1. Maintain your healthy sleep cycle (7-8 hours daily).\n2. Continue regular physical activity to help sustain positive mental health markers.\n3. Practice mindfulness or journaling weekly to check in with your emotional well-being.";
-  } else if (data.metrics.depression >= 70) {
-    recommendationTitle = "Indicators of Depression Detected";
-    recommendationText = "The audio analysis indicates significant voice markers associated with depression, including reduced pitch modulation and slower speech tempo.\n\nRecommendations:\n1. Reach out to a trusted friend, family member, or professional counselor to share your feelings.\n2. Incorporate light daily walks or breathing exercises (5 minutes, 3 times a day) to gradually lift energy levels.\n3. Try to break your daily goals into very small, manageable tasks to avoid feeling overwhelmed.";
+  if (depressionScore <= 20) {
+    recommendationTitle = "Very Low Depression Indicators";
+    recommendationText = `Depression indicator: ${depressionScore}%. The uploaded audio shows vocal patterns that are mostly aligned with a stable emotional state. The model detects low risk markers in this recording.
+
+Recommendations:
+1. Maintain your current healthy routine, including sleep, hydration, and balanced daily activity.
+2. Keep doing regular self-check-ins, such as journaling once or twice a week.
+3. Use this result as a baseline for future comparisons, especially if your mood or stress level changes.`;
+  } else if (depressionScore <= 40) {
+    recommendationTitle = "Low to Mild Emotional Strain";
+    recommendationText = `Depression indicator: ${depressionScore}%. The audio contains a few markers that may reflect mild stress, fatigue, or temporary emotional strain, but the overall pattern is still closer to a normal state.
+
+Recommendations:
+1. Take short breaks during the day and reduce avoidable sources of stress where possible.
+2. Prioritize consistent sleep and light physical activity for the next few days.
+3. Recheck with another recording if you feel your mood, energy, or motivation is declining.`;
+  } else if (depressionScore <= 60) {
+    recommendationTitle = "Moderate Emotional Fluctuation";
+    recommendationText = `Depression indicator: ${depressionScore}%. The model finds a balanced mix of normal and depression-related vocal markers. This may suggest emotional fluctuation, stress accumulation, or reduced vocal energy.
+
+Recommendations:
+1. Monitor your mood and daily functioning more intentionally over the next week.
+2. Talk with a trusted friend, family member, mentor, or counselor if the feeling persists.
+3. Try structured coping activities such as breathing exercises, a short walk, or breaking tasks into smaller steps.`;
+  } else if (depressionScore <= 80) {
+    recommendationTitle = "High Depression-Related Voice Markers";
+    recommendationText = `Depression indicator: ${depressionScore}%. The uploaded audio shows stronger vocal markers associated with depression, such as reduced variation, lower energy, or slower speech-related patterns.
+
+Recommendations:
+1. Consider reaching out to a mental health professional, campus counselor, or trusted support person.
+2. Avoid handling this alone if the symptoms affect sleep, appetite, motivation, study, or work.
+3. Create a simple support plan today: one person to contact, one small task to complete, and one calming activity.`;
   } else {
-    recommendationTitle = "Mild Emotional Fluctuations Detected";
-    recommendationText = "The audio analysis indicates minor vocal markers associated with stress or fatigue. Vocal tension is slightly elevated.\n\nRecommendations:\n1. Take short, structured breaks (e.g., Pomodoro technique) during work hours to rest your mind.\n2. Limit caffeine and screen time, especially 1 hour before bedtime.\n3. Practice deep breathing exercises or short walks to reduce physical tension.";
+    recommendationTitle = "Very High Depression-Related Indicators";
+    recommendationText = `Depression indicator: ${depressionScore}%. The model detects very strong depression-related vocal markers in this recording. This result should be treated as an important signal for follow-up, not as a clinical diagnosis.
+
+Recommendations:
+1. Please seek support from a qualified mental health professional as soon as possible.
+2. If you feel unsafe, overwhelmed, or at risk of self-harm, contact local emergency services or a crisis hotline immediately.
+3. Reach out to someone you trust today and avoid staying isolated while waiting for professional help.`;
   }
 
   return (
