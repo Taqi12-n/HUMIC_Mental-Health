@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   Upload, CheckCircle, Shield, Zap, FileAudio, 
-  Loader2, Activity, ArrowRight, Trash2, Eye
+  Loader2, Activity, ArrowRight, Trash2, Eye, MessageSquare, User
 } from "lucide-react";
 import SectionContainer from "./SectionContainer";
 import { getApiUrl } from "../utils/api";
@@ -16,7 +16,7 @@ const features = [
   { icon: Zap, label: "Fast", color: "text-amber-500" },
 ];
 
-type UploadState = "idle" | "uploading" | "analyzing" | "has_result";
+type UploadState = "idle" | "transcript_form" | "uploading" | "analyzing" | "has_result" | "error";
 
 interface SummaryData {
   id: string;
@@ -34,6 +34,10 @@ export default function UploadSection() {
   const [fileSize, setFileSize] = useState("");
   const [uploadProgress, setUploadProgress] = useState(0);
   const [activeResult, setActiveResult] = useState<SummaryData | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [transcript, setTranscript] = useState("");
+  const [gender, setGender] = useState("unknown");
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Helper to get top feature from SHAP
@@ -105,22 +109,28 @@ export default function UploadSection() {
     }
   };
 
-  const startProcess = async (file: File) => {
+  const startProcess = (file: File) => {
     setFileName(file.name);
-    const sizeStr = file.size > 1024 * 1024 
-      ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` 
+    setErrorMessage("");
+    const sizeStr = file.size > 1024 * 1024
+      ? `${(file.size / (1024 * 1024)).toFixed(1)} MB`
       : `${(file.size / 1024).toFixed(0)} KB`;
     setFileSize(sizeStr);
-    
+    setPendingFile(file);
+    setState("transcript_form");
+  };
+
+  const handleConfirmAnalysis = async () => {
+    if (!pendingFile) return;
     setState("uploading");
     setUploadProgress(0);
-    
+
     const uploadInterval = setInterval(async () => {
       setUploadProgress((prev) => {
         if (prev >= 100) {
           clearInterval(uploadInterval);
           setState("analyzing");
-          performAnalysis(file);
+          performAnalysis(pendingFile);
           return 100;
         }
         return prev + 10;
@@ -128,11 +138,88 @@ export default function UploadSection() {
     }, 150);
   };
 
+  const audioBufferToWav = (audioBuffer: AudioBuffer) => {
+    const numberOfChannels = audioBuffer.numberOfChannels;
+    const sampleRate = audioBuffer.sampleRate;
+    const samples = audioBuffer.length;
+    const bytesPerSample = 2;
+    const blockAlign = numberOfChannels * bytesPerSample;
+    const buffer = new ArrayBuffer(44 + samples * blockAlign);
+    const view = new DataView(buffer);
+
+    const writeString = (offset: number, value: string) => {
+      for (let i = 0; i < value.length; i++) {
+        view.setUint8(offset + i, value.charCodeAt(i));
+      }
+    };
+
+    writeString(0, "RIFF");
+    view.setUint32(4, 36 + samples * blockAlign, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, numberOfChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * blockAlign, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, 16, true);
+    writeString(36, "data");
+    view.setUint32(40, samples * blockAlign, true);
+
+    const channels = Array.from({ length: numberOfChannels }, (_, channel) => {
+      const data = new Float32Array(samples);
+      audioBuffer.copyFromChannel(data, channel);
+      return data;
+    });
+
+    let offset = 44;
+    for (let i = 0; i < samples; i++) {
+      for (let channel = 0; channel < numberOfChannels; channel++) {
+        const sample = Math.max(-1, Math.min(1, channels[channel][i]));
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+        offset += bytesPerSample;
+      }
+    }
+
+    return new Blob([buffer], { type: "audio/wav" });
+  };
+
+  const prepareAudioForUpload = async (file: File) => {
+    if (/\.wav$/i.test(file.name)) {
+      return file;
+    }
+
+    const browserWindow = window as typeof window & {
+      webkitAudioContext?: typeof AudioContext;
+    };
+    const AudioContextClass = window.AudioContext || browserWindow.webkitAudioContext;
+
+    if (!AudioContextClass) {
+      throw new Error("Browser tidak mendukung konversi audio. Silakan gunakan file WAV.");
+    }
+
+    const audioContext = new AudioContextClass();
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const decoded = await audioContext.decodeAudioData(arrayBuffer);
+      const wavBlob = audioBufferToWav(decoded);
+      const convertedName = file.name.replace(/\.[^/.]+$/, "") || "audio";
+      return new File([wavBlob], `${convertedName}.wav`, { type: "audio/wav" });
+    } finally {
+      await audioContext.close();
+    }
+  };
+
   const performAnalysis = async (file: File) => {
     const formData = new FormData();
-    formData.append("file", file);
 
     try {
+      const uploadFile = await prepareAudioForUpload(file);
+      formData.append("file", uploadFile);
+      formData.append("transcript", transcript.trim());
+      formData.append("gender", gender);
+
       const response = await fetch(getApiUrl("/api/analyze"), {
         method: "POST",
         body: formData,
@@ -148,15 +235,17 @@ export default function UploadSection() {
         
         router.push(`/results?id=${result.id}`);
       } else {
-        throw new Error("Analysis failed");
+        const errorBody = await response.json().catch(() => null);
+        throw new Error(errorBody?.detail || "Analysis failed");
       }
     } catch (error) {
-      console.warn("FastAPI backend is offline. Saving mock id to localStorage.", error);
-      setTimeout(() => {
-        localStorage.setItem("mindvoice_active_result_id", "fallback-mock-id");
-        window.dispatchEvent(new Event("storage"));
-        router.push("/results");
-      }, 1500);
+      console.warn("Audio analysis failed.", error);
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Audio tidak bisa diproses. Silakan coba file WAV, MP3, atau M4A lain."
+      );
+      setState("error");
     }
   };
 
@@ -166,6 +255,10 @@ export default function UploadSection() {
     window.dispatchEvent(new Event("storage"));
     setState("idle");
     setActiveResult(null);
+    setErrorMessage("");
+    setTranscript("");
+    setGender("unknown");
+    setPendingFile(null);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -175,7 +268,7 @@ export default function UploadSection() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const file = e.dataTransfer.files?.[0];
-    if (file && (file.type.includes("audio") || file.name.endsWith(".mp3") || file.name.endsWith(".wav"))) {
+    if (file && (file.type.includes("audio") || /\.(mp3|wav|m4a|mp4a)$/i.test(file.name))) {
       startProcess(file);
     }
   };
@@ -217,7 +310,7 @@ export default function UploadSection() {
             type="file" 
             ref={fileInputRef} 
             onChange={handleFileChange} 
-            accept="audio/*,.mp3,.wav" 
+            accept="audio/*,.mp3,.wav,.m4a,.mp4a" 
             className="hidden" 
           />
 
@@ -246,8 +339,98 @@ export default function UploadSection() {
                   or click to browse files
                 </p>
                 <span className="inline-block px-4 py-1.5 rounded-full bg-bg text-text-muted text-xs font-medium border border-border-light">
-                  Supports WAV & MP3
+                  Supports WAV, MP3 & M4A
                 </span>
+              </motion.div>
+            )}
+
+            {state === "transcript_form" && (
+              <motion.div
+                key="transcript_form"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="space-y-5"
+              >
+                {/* File info badge */}
+                <div className="flex items-center gap-3 p-3 bg-bg rounded-xl border border-border-light">
+                  <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                    <FileAudio size={18} className="text-primary" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-text truncate">{fileName}</p>
+                    <p className="text-xs text-text-muted">{fileSize}</p>
+                  </div>
+                </div>
+
+                {/* Transcript input */}
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm font-bold text-text">
+                    <MessageSquare size={15} className="text-primary" />
+                    Transkripsi Audio
+                    <span className="ml-1 px-2 py-0.5 rounded-full bg-bg text-[10px] text-text-muted border border-border-light font-medium">Opsional — meningkatkan akurasi</span>
+                  </label>
+                  <textarea
+                    id="transcript-input"
+                    rows={4}
+                    value={transcript}
+                    onChange={(e) => setTranscript(e.target.value)}
+                    placeholder="Ketik atau tempel teks dari audio di sini... Contoh: 'Akhir-akhir ini saya merasa sangat lelah dan tidak bersemangat. Tidur saya juga tidak teratur.'"
+                    className="w-full resize-none rounded-xl border border-border-light bg-bg p-3.5 text-sm text-text placeholder:text-text-light focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50 transition-all leading-relaxed"
+                  />
+                  <p className="text-[11px] text-text-light leading-relaxed">
+                    Transkripsi membantu model menghitung fitur linguistik (kata negatif/positif, filler words, dll.) yang digunakan saat training. Tanpa transkripsi, fitur ini akan menggunakan nilai estimasi.
+                  </p>
+                </div>
+
+                {/* Gender selector */}
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm font-bold text-text">
+                    <User size={15} className="text-primary" />
+                    Gender Pembicara
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["male", "female", "unknown"] as const).map((g) => (
+                      <button
+                        key={g}
+                        id={`gender-${g}`}
+                        type="button"
+                        onClick={() => setGender(g)}
+                        className={`py-2.5 rounded-xl text-sm font-semibold border transition-all ${
+                          gender === g
+                            ? "gradient-bg text-white border-transparent shadow"
+                            : "bg-bg text-text-muted border-border-light hover:border-primary/30"
+                        }`}
+                      >
+                        {g === "male" ? "Male" : g === "female" ? "Female" : "Unknown"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Action buttons */}
+                <div className="flex gap-3 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setState("idle");
+                      setPendingFile(null);
+                      if (fileInputRef.current) fileInputRef.current.value = "";
+                    }}
+                    className="flex-1 py-3 rounded-full border border-border bg-white text-text font-bold text-sm hover:bg-bg transition-colors"
+                  >
+                    Ganti File
+                  </button>
+                  <button
+                    id="confirm-analyze-btn"
+                    type="button"
+                    onClick={handleConfirmAnalysis}
+                    className="flex-[2] inline-flex items-center justify-center gap-2 py-3 rounded-full gradient-bg text-white font-bold text-sm shadow hover:scale-[1.02] transition-transform"
+                  >
+                    Analisis Sekarang
+                    <ArrowRight size={16} />
+                  </button>
+                </div>
               </motion.div>
             )}
 
@@ -300,6 +483,39 @@ export default function UploadSection() {
                     />
                   ))}
                 </div>
+              </motion.div>
+            )}
+
+            {state === "error" && (
+              <motion.div
+                key="error"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="border border-red-100 bg-red-50/60 rounded-2xl p-8 text-center"
+              >
+                <div className="w-12 h-12 rounded-xl bg-white text-primary flex items-center justify-center mx-auto mb-4 shadow-sm">
+                  <FileAudio size={24} />
+                </div>
+                <h4 className="font-bold text-text mb-2">Audio could not be analyzed</h4>
+                <p className="text-xs text-text-muted max-w-sm mx-auto leading-relaxed mb-5">
+                  {errorMessage}
+                </p>
+                <button
+                  onClick={() => {
+                    setState("idle");
+                    setErrorMessage("");
+                    setPendingFile(null);
+                    setTranscript("");
+                    setGender("unknown");
+                    if (fileInputRef.current) {
+                      fileInputRef.current.value = "";
+                    }
+                  }}
+                  className="inline-flex items-center justify-center px-5 py-2.5 rounded-full gradient-bg text-white font-bold text-sm shadow hover:scale-[1.02] transition-transform"
+                >
+                  Try Another Audio
+                </button>
               </motion.div>
             )}
 
