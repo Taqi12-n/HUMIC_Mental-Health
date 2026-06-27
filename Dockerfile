@@ -17,5 +17,5 @@ COPY Model/ ./Model/
 
 EXPOSE 8000
 
-# Run uvicorn server pointing to the backend main module
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run uvicorn server pointing to the backend main module, binding to dynamic $PORT
+CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
