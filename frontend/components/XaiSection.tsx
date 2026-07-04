@@ -41,19 +41,19 @@ const biomarkerDescriptions = [
     clinicalMeaning: "Normal speech exhibits dynamic pitch variation reflecting rich emotional modulation. Monotone speech (very low pitch variability) is a classic indicator of emotional flattening often associated with clinical depression.",
   },
   {
-    name: "Speech Tempo",
-    definition: "Average speech rate measured in syllables per second.",
-    clinicalMeaning: "Reduced speech rate (tempo) indicates cognitive deceleration and psychomotor retardation, common markers of fatigue or depressive states.",
+    name: "Average Pitch",
+    definition: "The mean fundamental frequency (F0) of voiced speech segments, measured in Hertz.",
+    clinicalMeaning: "Depressive states are often characterized by a narrower pitch range or lower average pitch due to decreased vocal fold tension and physiological withdrawal.",
   },
   {
-    name: "Pause Ratio",
-    definition: "Percentage of total audio duration consisting of silence or non-speech pauses.",
-    clinicalMeaning: "Depressed individuals often demonstrate longer and more frequent pauses during speech, representing hesitation, speech formulation difficulties, or low cognitive energy.",
+    name: "Vocal Energy (RMS)",
+    definition: "Root-Mean-Square (RMS) energy, which represents the overall loudness and speech power.",
+    clinicalMeaning: "Lower vocal energy and quiet speaking patterns are commonly observed in depression, reflecting reduced respiratory drive and physical exhaustion.",
   },
   {
-    name: "Jitter (local)",
-    definition: "Short-term cycle-to-cycle perturbations in fundamental frequency.",
-    clinicalMeaning: "Elevated jitter indicates micro-instability in vocal fold vibration, often caused by vocal fold tension, physical fatigue, or autonomic nervous system arousal (stress).",
+    name: "Zero Crossing Rate",
+    definition: "The rate at which the speech signal transitions between positive and negative values, indicating signal noisiness and high-frequency content.",
+    clinicalMeaning: "Variations in Zero Crossing Rate indicate changes in vocal breathiness, voice hoarseness, or articulation speed, which are often affected by emotional strain.",
   },
   {
     name: "Spectral Centroid",
@@ -72,30 +72,30 @@ export default function XaiSection({ data }: XaiSectionProps) {
     predictionValue: data.primaryDetection === "Depression" ? floatVal(data.confidence) : floatVal(100 - data.confidence),
     features: data.primaryDetection === "Depression" ? [
       {"name": "Pitch Variability (F0 SD)", "value": 8.5, "featureValue": "11.2 Hz", "effect": "increases risk"},
-      {"name": "Speech Tempo", "value": 7.2, "featureValue": "2.1 syl/s", "effect": "increases risk"},
-      {"name": "Pause Ratio", "value": 6.1, "featureValue": "24.5%", "effect": "increases risk"},
-      {"name": "Jitter (local)", "value": 4.0, "featureValue": "1.82%", "effect": "increases risk"},
+      {"name": "Average Pitch", "value": 7.2, "featureValue": "152 Hz", "effect": "increases risk"},
+      {"name": "Vocal Energy (RMS)", "value": 6.1, "featureValue": "0.015", "effect": "increases risk"},
+      {"name": "Zero Crossing Rate", "value": 4.0, "featureValue": "0.082", "effect": "increases risk"},
       {"name": "Spectral Centroid", "value": 2.2, "featureValue": "1250 Hz", "effect": "increases risk"}
     ] : [
       {"name": "Pitch Variability (F0 SD)", "value": -9.2, "featureValue": "31.8 Hz", "effect": "decreases risk"},
-      {"name": "Speech Tempo", "value": -8.1, "featureValue": "3.8 syl/s", "effect": "decreases risk"},
-      {"name": "Pause Ratio", "value": -6.3, "featureValue": "8.2%", "effect": "decreases risk"},
-      {"name": "Jitter (local)", "value": -4.2, "featureValue": "0.65%", "effect": "decreases risk"},
+      {"name": "Average Pitch", "value": -8.1, "featureValue": "184 Hz", "effect": "decreases risk"},
+      {"name": "Vocal Energy (RMS)", "value": -6.3, "featureValue": "0.045", "effect": "decreases risk"},
+      {"name": "Zero Crossing Rate", "value": -4.2, "featureValue": "0.125", "effect": "decreases risk"},
       {"name": "Spectral Centroid", "value": -2.2, "featureValue": "1890 Hz", "effect": "decreases risk"}
     ]
   };
 
   const defaultLimeRules: LimeRule[] = data.limeRules || (data.primaryDetection === "Depression" ? [
     {"feature": "Pitch Variability", "rule": "F0 SD <= 15.0 Hz", "value": "11.2 Hz", "weight": 0.24, "influence": "Positive (Depression)"},
-    {"feature": "Speech Tempo", "rule": "Tempo <= 2.4 syl/s", "value": "2.1 syl/s", "weight": 0.20, "influence": "Positive (Depression)"},
-    {"feature": "Pause Ratio", "rule": "Pause Ratio > 18.0%", "value": "24.5%", "weight": 0.16, "influence": "Positive (Depression)"},
-    {"feature": "Jitter", "rule": "Jitter > 1.05%", "value": "1.82%", "weight": 0.12, "influence": "Positive (Depression)"},
+    {"feature": "Average Pitch", "rule": "Pitch <= 160 Hz", "value": "152 Hz", "weight": 0.20, "influence": "Positive (Depression)"},
+    {"feature": "Vocal Energy", "rule": "RMS <= 0.020", "value": "0.015", "weight": 0.16, "influence": "Positive (Depression)"},
+    {"feature": "Zero Crossing Rate", "rule": "ZCR <= 0.090", "value": "0.082", "weight": 0.12, "influence": "Positive (Depression)"},
     {"feature": "Spectral Centroid", "rule": "Centroid <= 1400 Hz", "value": "1250 Hz", "weight": 0.08, "influence": "Positive (Depression)"}
   ] : [
     {"feature": "Pitch Variability", "rule": "F0 SD > 22.0 Hz", "value": "31.8 Hz", "weight": -0.26, "influence": "Negative (Normal)"},
-    {"feature": "Speech Tempo", "rule": "Tempo > 3.0 syl/s", "value": "3.8 syl/s", "weight": -0.22, "influence": "Negative (Normal)"},
-    {"feature": "Pause Ratio", "rule": "Pause Ratio <= 12.0%", "value": "8.2%", "weight": -0.18, "influence": "Negative (Normal)"},
-    {"feature": "Jitter", "rule": "Jitter <= 1.05%", "value": "0.65%", "weight": -0.12, "influence": "Negative (Normal)"},
+    {"feature": "Average Pitch", "rule": "Pitch > 175 Hz", "value": "184 Hz", "weight": -0.22, "influence": "Negative (Normal)"},
+    {"feature": "Vocal Energy", "rule": "RMS > 0.035", "value": "0.045", "weight": -0.18, "influence": "Negative (Normal)"},
+    {"feature": "Zero Crossing Rate", "rule": "ZCR > 0.110", "value": "0.125", "weight": -0.12, "influence": "Negative (Normal)"},
     {"feature": "Spectral Centroid", "rule": "Centroid > 1600 Hz", "value": "1890 Hz", "weight": -0.09, "influence": "Negative (Normal)"}
   ]);
 

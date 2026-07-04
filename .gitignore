@@ -44,5 +44,9 @@ node_modules/
 .next/
 
 backend/mindvoice.db
+backend/.hf_cache/
 *.db
 *.sqlite3
+
+*.pt
+Model/Deep Learning/

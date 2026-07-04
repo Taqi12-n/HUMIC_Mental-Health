@@ -27,9 +27,9 @@ const fallbackData = {
     signalQuality: "94%"
   },
   performance: {
-    accuracy: "92.4%",
-    precision: "89.7%",
-    f1Score: "90.8%"
+    accuracy: "65.0%",
+    precision: "65.2%",
+    f1Score: "64.9%"
   }
 };
 

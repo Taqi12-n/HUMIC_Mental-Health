@@ -209,6 +209,14 @@ function ResultsContent() {
     ? { stroke: "#E91E63", text: "text-primary", bg: "bg-red-500" }
     : { stroke: "#10B981", text: "text-green-500", bg: "bg-green-500" };
 
+  const modelRows = data.modelResults
+    ? [
+        { label: "Machine Learning", value: data.modelResults.machineLearning },
+        { label: "Deep Learning", value: data.modelResults.deepLearning },
+        { label: "Consensus", value: data.modelResults.consensus },
+      ]
+    : [];
+
   // AI Interpretation dynamic text selection based on depression percentage
   const depressionScore = Math.max(0, Math.min(100, Number(data.metrics?.depression ?? 0)));
   let recommendationTitle = "";
@@ -375,6 +383,73 @@ Recommendations:
           </div>
         </div>
       </div>
+
+      {modelRows.length > 0 && (
+        <div className="bg-white rounded-2xl border border-border-light p-5 sm:p-6 soft-shadow space-y-4">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl gradient-bg-subtle flex items-center justify-center text-primary">
+              <Brain size={18} />
+            </div>
+            <div>
+              <h4 className="text-sm sm:text-base font-extrabold text-text">Model Comparison</h4>
+              <p className="text-xs text-text-muted">Machine learning, deep learning, and consensus outputs</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {modelRows.map((row) => {
+              const model = row.value;
+              const isAvailable = model?.status === "available";
+              const depressionValue = isAvailable ? Number(model.depression ?? 0) : 0;
+              return (
+                <div key={row.label} className="bg-bg p-4 rounded-xl border border-border-light space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <span className="text-[10px] text-text-light font-bold uppercase tracking-wider block">
+                        {row.label}
+                      </span>
+                      <h5 className="text-sm font-extrabold text-text truncate mt-0.5">
+                        {model?.model || row.label}
+                      </h5>
+                    </div>
+                    <span
+                      className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                        isAvailable
+                          ? "bg-green-50 text-green-600 border-green-100"
+                          : "bg-amber-50 text-amber-600 border-amber-100"
+                      }`}
+                    >
+                      {isAvailable ? "Active" : "Unavailable"}
+                    </span>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-xs font-bold text-text-muted mb-1.5">
+                      <span>Depression Probability</span>
+                      <span className={isAvailable ? "text-primary" : "text-text-light"}>
+                        {isAvailable ? `${depressionValue}%` : "N/A"}
+                      </span>
+                    </div>
+                    <div className="w-full bg-white h-1.5 rounded-full overflow-hidden border border-border-light">
+                      <div
+                        className={isAvailable ? "bg-primary h-full rounded-full" : "bg-slate-200 h-full rounded-full"}
+                        style={{ width: `${depressionValue}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="text-[11px] text-text-muted leading-relaxed">
+                    <p className="font-semibold text-text truncate">{model?.scenario}</p>
+                    {!isAvailable && model?.error && (
+                      <p className="mt-1 line-clamp-2">{model.error}</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Audio Info Card Grid */}
       {data.audioInfo && (

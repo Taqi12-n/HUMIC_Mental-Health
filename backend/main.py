@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from functools import lru_cache
@@ -10,12 +10,16 @@ import io
 import os
 import json
 import sqlite3
-import pickle
 import warnings
 
 import numpy as np
 
-app = FastAPI(title="MindVoice AI Backend", version="1.0.0")
+warnings.filterwarnings(
+    "ignore",
+    message="Passing `gradient_checkpointing` to a config initialization is deprecated.*",
+)
+
+app = FastAPI(title="MindVoice AI Backend", version="2.0.0")
 
 # Enable CORS for Next.js frontend
 app.add_middleware(
@@ -32,13 +36,32 @@ SQLITE_DB_PATH = os.getenv(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "mindvoice.db"),
 )
 
-# Local fallback for development only. Production should use DATABASE_URL.
+# Local fallback for development only.
 results_db = {}
 audio_db = {}
 MODEL_DIR = Path(__file__).resolve().parent.parent / "Model"
-EXPECTED_AUDIO_FEATURES = 56
-EXPECTED_LINGUISTIC_FEATURES = 25
-NEUTRAL_GENDER_VALUE = 0.5
+ML_MODEL_DIR = MODEL_DIR / "Machine Learning"
+DL_MODEL_DIR = MODEL_DIR / "Deep Learning"
+HF_CACHE_DIR = Path(__file__).resolve().parent / ".hf_cache"
+HF_TRANSFORMERS_CACHE_DIR = HF_CACHE_DIR / "transformers"
+os.environ.setdefault("HF_HOME", str(HF_CACHE_DIR))
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
+# ── New model: single Pipeline pkl (StandardScaler → PCA → XGBClassifier) ──
+MODEL_PKL_PATH = ML_MODEL_DIR / "best_XGB_S2_MFCC.pkl"
+MODEL_META_PATH = ML_MODEL_DIR / "best_model_metadata.json"
+DL_MODEL_PATH = DL_MODEL_DIR / "v4_wav2vec_3f.pt"
+
+# Expected number of MFCC features for S2_MFCC scenario (v95 training)
+EXPECTED_MFCC_FEATURES = 990
+# OOF threshold from metadata
+MODEL_THRESHOLD = 0.495
+DL_RAW_LEN = 160_000
+DL_MAX_MFCC_LEN = 313
+DL_MAX_SPEC_LEN = 313
+DL_MFCC_FEATURES = 120
+DL_N_MELS = 128
+DL_THRESHOLD = 0.5
 
 
 def is_postgres_enabled():
@@ -71,44 +94,37 @@ def safe_float(value, default=0.0):
         return default
 
 
-def summarize_vector(values):
-    values = np.nan_to_num(np.asarray(values, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
-    return [
-        safe_float(np.mean(values)),
-        safe_float(np.std(values)),
-    ]
-
+# ── Model loading ─────────────────────────────────────────────────────────────
 
 @lru_cache(maxsize=1)
-def load_model_artifacts():
-    required_files = {
-        "model": MODEL_DIR / "mlp_model.pkl",
-        "scaler": MODEL_DIR / "scaler.pkl",
-        "pca": MODEL_DIR / "pca.pkl",
-        "feature_mask": MODEL_DIR / "feature_mask.pkl",
-    }
-    missing = [str(path) for path in required_files.values() if not path.exists()]
-    if missing:
-        raise RuntimeError(f"Model artifacts not found: {', '.join(missing)}")
+def load_model_pipeline():
+    """Load the single sklearn Pipeline pkl (StandardScaler → PCA → XGBClassifier)."""
+    try:
+        import joblib
+    except ImportError as exc:
+        raise RuntimeError("joblib is not installed. Run: pip install joblib") from exc
+
+    if not MODEL_PKL_PATH.exists():
+        raise RuntimeError(f"Model file not found: {MODEL_PKL_PATH}")
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        with open(required_files["model"], "rb") as f:
-            model = pickle.load(f)
-        with open(required_files["scaler"], "rb") as f:
-            scaler = pickle.load(f)
-        with open(required_files["pca"], "rb") as f:
-            pca = pickle.load(f)
-        with open(required_files["feature_mask"], "rb") as f:
-            feature_mask = pickle.load(f)
+        pipeline = joblib.load(MODEL_PKL_PATH)
 
-    return {
-        "model": model,
-        "scaler": scaler,
-        "pca": pca,
-        "feature_mask": np.asarray(feature_mask, dtype=bool),
-    }
+    # Load threshold from metadata if available
+    threshold = MODEL_THRESHOLD
+    if MODEL_META_PATH.exists():
+        try:
+            with open(MODEL_META_PATH, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            threshold = float(meta.get("threshold", MODEL_THRESHOLD))
+        except Exception:
+            pass
 
+    return pipeline, threshold
+
+
+# ── Audio loading ─────────────────────────────────────────────────────────────
 
 def load_audio_signal(file_bytes):
     try:
@@ -149,6 +165,7 @@ def load_audio_signal(file_bytes):
         y = y.mean(axis=1)
     y = np.nan_to_num(np.asarray(y, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
     if sr != 16000:
+        from scipy.signal import resample_poly
         divisor = int(np.gcd(sr, 16000))
         y = resample_poly(y, 16000 // divisor, sr // divisor).astype(np.float32)
         sr = 16000
@@ -162,7 +179,9 @@ def load_audio_signal(file_bytes):
     return y, sr
 
 
-def frame_signal(y, sr, frame_ms=25, hop_ms=10):
+# ── MFCC feature extraction (990 features matching v95 S2_MFCC training) ─────
+
+def _frame_signal(y, sr, frame_ms=25, hop_ms=10):
     frame_len = max(1, int(sr * frame_ms / 1000))
     hop_len = max(1, int(sr * hop_ms / 1000))
     if y.size < frame_len:
@@ -175,21 +194,20 @@ def frame_signal(y, sr, frame_ms=25, hop_ms=10):
     return y[indices] * np.hamming(frame_len)
 
 
-def hz_to_mel(hz):
+def _hz_to_mel(hz):
     return 2595.0 * np.log10(1.0 + hz / 700.0)
 
 
-def mel_to_hz(mel):
+def _mel_to_hz(mel):
     return 700.0 * (10.0 ** (mel / 2595.0) - 1.0)
 
 
-def mel_filterbank(sr, n_fft, n_filters=26, fmin=0, fmax=None):
+def _mel_filterbank(sr, n_fft, n_filters=40, fmin=0, fmax=None):
     fmax = fmax or sr / 2
-    mel_points = np.linspace(hz_to_mel(fmin), hz_to_mel(fmax), n_filters + 2)
-    hz_points = mel_to_hz(mel_points)
+    mel_points = np.linspace(_hz_to_mel(fmin), _hz_to_mel(fmax), n_filters + 2)
+    hz_points = _mel_to_hz(mel_points)
     bins = np.floor((n_fft + 1) * hz_points / sr).astype(int)
     bank = np.zeros((n_filters, n_fft // 2 + 1), dtype=np.float64)
-
     for idx in range(1, n_filters + 1):
         left, center, right = bins[idx - 1], bins[idx], bins[idx + 1]
         if center > left:
@@ -199,89 +217,219 @@ def mel_filterbank(sr, n_fft, n_filters=26, fmin=0, fmax=None):
     return bank
 
 
-def compute_mfcc(frames, sr, n_mfcc=13, n_fft=512):
+def _compute_mfcc_matrix(frames, sr, n_mfcc=40, n_fft=512):
+    """Return mfcc matrix of shape (n_mfcc, n_frames)."""
     from scipy.fftpack import dct
-
     spectrum = np.fft.rfft(frames, n=n_fft)
     power = (np.abs(spectrum) ** 2) / n_fft
-    filters = mel_filterbank(sr, n_fft)
+    filters = _mel_filterbank(sr, n_fft, n_filters=40)
     mel_energy = np.dot(power, filters.T)
     mel_energy = np.where(mel_energy <= 1e-10, 1e-10, mel_energy)
-    return dct(np.log(mel_energy), type=2, axis=1, norm="ortho")[:, :n_mfcc].T
+    mfcc = dct(np.log(mel_energy), type=2, axis=1, norm="ortho")[:, :n_mfcc].T  # (n_mfcc, n_frames)
+    return mfcc
 
 
-def compute_delta(features):
+def _compute_delta(features):
+    """features: (n_coef, n_frames)"""
     padded = np.pad(features, ((0, 0), (1, 1)), mode="edge")
     return (padded[:, 2:] - padded[:, :-2]) / 2.0
 
 
-def estimate_pitch_from_frames(frames, sr):
+def _safe_stats(arr):
+    """Compute 8 statistics for a 1-D array: mean, std, min, max, p25, p75, skewness, kurtosis."""
+    from scipy.stats import skew, kurtosis
+    if arr.size == 0:
+        return [0.0] * 8
+    m = float(np.mean(arr))
+    s = float(np.std(arr))
+    mn = float(np.min(arr))
+    mx = float(np.max(arr))
+    p25 = float(np.percentile(arr, 25))
+    p75 = float(np.percentile(arr, 75))
+    sk = float(skew(arr)) if arr.size > 2 else 0.0
+    ku = float(kurtosis(arr)) if arr.size > 3 else 0.0
+    return [
+        safe_float(m), safe_float(s), safe_float(mn), safe_float(mx),
+        safe_float(p25), safe_float(p75), safe_float(sk), safe_float(ku),
+    ]
+
+
+def _estimate_pitch(frames, sr):
+    """Return per-frame pitch (Hz), 0 for unvoiced frames."""
     pitches = []
     min_lag = max(1, int(sr / 400))
     max_lag = min(frames.shape[1] - 1, int(sr / 50))
-    for frame in frames[:: max(1, len(frames) // 80)]:
+    for frame in frames:
         frame = frame - np.mean(frame)
         energy = np.sum(frame * frame)
-        if energy < 1e-4:
+        if energy < 1e-4 or max_lag <= min_lag:
+            pitches.append(0.0)
             continue
-        corr = np.correlate(frame, frame, mode="full")[len(frame) - 1 :]
-        if max_lag <= min_lag or corr[0] <= 0:
+        corr = np.correlate(frame, frame, mode="full")[len(frame) - 1:]
+        if corr[0] <= 0:
+            pitches.append(0.0)
             continue
         lag = min_lag + int(np.argmax(corr[min_lag:max_lag]))
         strength = corr[lag] / corr[0]
-        if strength > 0.25:
-            pitches.append(sr / lag)
+        pitches.append(sr / lag if strength > 0.25 else 0.0)
     return np.asarray(pitches, dtype=np.float64)
 
 
-def extract_audio_features(file_bytes):
+def extract_mfcc_features_990(file_bytes):
+    """
+    Extract exactly 990 MFCC-based features matching v95 S2_MFCC training.
+
+    Structure:
+      - 40 MFCCs × 8 stats          = 320 features
+      - 40 delta MFCCs × 8 stats    = 320 features
+      - 40 delta-delta MFCCs × 8 stats = 320 features
+      - 30 prosodic/spectral features
+      Total = 990
+    """
     y, sr = load_audio_signal(file_bytes)
     duration = safe_float(y.size / sr)
-    frames = frame_signal(y, sr)
 
-    mfcc = compute_mfcc(frames, sr)
-    delta = compute_delta(mfcc)
-    spectrum = np.abs(np.fft.rfft(frames, n=512))
-    freqs = np.fft.rfftfreq(512, d=1.0 / sr)
-    spectrum_sum = np.maximum(spectrum.sum(axis=1), 1e-10)
+    frames = _frame_signal(y, sr)  # (n_frames, frame_len)
+
+    # MFCC matrix: (40, n_frames)
+    mfcc = _compute_mfcc_matrix(frames, sr, n_mfcc=40)
+    delta = _compute_delta(mfcc)
+    delta2 = _compute_delta(delta)
+
+    features = []
+
+    # 40 × 8 = 320: MFCC statistics
+    for i in range(40):
+        features.extend(_safe_stats(mfcc[i]))
+
+    # 40 × 8 = 320: Delta MFCC statistics
+    for i in range(40):
+        features.extend(_safe_stats(delta[i]))
+
+    # 40 × 8 = 320: Delta-delta MFCC statistics
+    for i in range(40):
+        features.extend(_safe_stats(delta2[i]))
+
+    # ── 30 Prosodic / spectral features ───────────────────────────────────────
+    n_fft = 512
+    spectrum = np.abs(np.fft.rfft(frames, n=n_fft))           # (n_frames, n_fft//2+1)
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sr)
+    spectrum_sum = np.maximum(spectrum.sum(axis=1), 1e-10)     # (n_frames,)
+
+    # RMS energy per frame
+    rms = np.sqrt(np.mean(frames ** 2, axis=1))
+
+    # ZCR per frame
+    zcr = np.mean(np.abs(np.diff(np.signbit(frames), axis=1)), axis=1).astype(np.float64)
+
+    # Spectral centroid & bandwidth
     spectral_centroid = (spectrum * freqs).sum(axis=1) / spectrum_sum
     spectral_bandwidth = np.sqrt(
         (spectrum * ((freqs[None, :] - spectral_centroid[:, None]) ** 2)).sum(axis=1)
         / spectrum_sum
     )
 
-    features = []
-    for idx in range(mfcc.shape[0]):
-        features.extend(summarize_vector(mfcc[idx]))
-    for idx in range(delta.shape[0]):
-        features.extend(summarize_vector(delta[idx]))
-    features.extend(summarize_vector(spectral_centroid))
-    features.extend(summarize_vector(spectral_bandwidth))
+    # Spectral rolloff (85% energy)
+    cumsum = np.cumsum(spectrum, axis=1)
+    rolloff_threshold = 0.85 * cumsum[:, -1:]
+    rolloff_idx = np.argmax(cumsum >= rolloff_threshold, axis=1)
+    spectral_rolloff = freqs[np.clip(rolloff_idx, 0, len(freqs) - 1)]
 
-    features = np.asarray(features[:EXPECTED_AUDIO_FEATURES], dtype=np.float64)
-    if features.size < EXPECTED_AUDIO_FEATURES:
-        features = np.pad(features, (0, EXPECTED_AUDIO_FEATURES - features.size))
+    # Spectral flatness
+    log_mean = np.mean(np.log(np.maximum(spectrum, 1e-10)), axis=1)
+    arith_mean = spectrum.mean(axis=1)
+    spectral_flatness = np.exp(log_mean) / np.maximum(arith_mean, 1e-10)
 
-    rms = np.sqrt(np.mean(frames * frames, axis=1))
-    zcr = np.mean(np.abs(np.diff(np.signbit(frames), axis=1)), axis=1)
-    pitch = estimate_pitch_from_frames(frames, sr)
+    # Pitch per frame (voiced = pitch > 0)
+    pitch_arr = _estimate_pitch(frames, sr)
+    voiced_mask = pitch_arr > 0
+    voiced_ratio = float(voiced_mask.mean()) if voiced_mask.size else 0.0
 
+    pitch_voiced = pitch_arr[voiced_mask] if voiced_mask.any() else np.array([0.0])
+
+    # HNR proxy: ratio of voiced frames energy vs total energy
+    voiced_energy = float(rms[voiced_mask].mean()) if voiced_mask.any() else 0.0
+    total_energy = float(rms.mean()) if rms.size else 1e-10
+    hnr_proxy = safe_float(voiced_energy / max(total_energy, 1e-10))
+
+    # Spectral entropy
+    prob = spectrum / spectrum_sum[:, None]
+    prob = np.clip(prob, 1e-10, 1.0)
+    spectral_entropy_per_frame = -np.sum(prob * np.log(prob + 1e-10), axis=1)
+    spectral_entropy = safe_float(np.mean(spectral_entropy_per_frame))
+
+    # Jitter (F0 perturbation): cycle-to-cycle F0 variation among voiced frames
+    if pitch_voiced.size > 1:
+        jitter = safe_float(np.mean(np.abs(np.diff(pitch_voiced))) / max(np.mean(pitch_voiced), 1e-10))
+    else:
+        jitter = 0.0
+
+    # Shimmer (amplitude perturbation): cycle-to-cycle amplitude variation
+    rms_voiced = rms[voiced_mask] if voiced_mask.any() else rms
+    if rms_voiced.size > 1:
+        shimmer = safe_float(np.mean(np.abs(np.diff(rms_voiced))) / max(np.mean(rms_voiced), 1e-10))
+    else:
+        shimmer = 0.0
+
+    # 30 prosodic features
+    prosodic = [
+        # RMS stats (4)
+        safe_float(np.mean(rms)), safe_float(np.std(rms)),
+        safe_float(np.min(rms)),  safe_float(np.max(rms)),
+        # ZCR stats (4)
+        safe_float(np.mean(zcr)), safe_float(np.std(zcr)),
+        safe_float(np.min(zcr)),  safe_float(np.max(zcr)),
+        # Spectral centroid stats (4)
+        safe_float(np.mean(spectral_centroid)), safe_float(np.std(spectral_centroid)),
+        safe_float(np.min(spectral_centroid)),  safe_float(np.max(spectral_centroid)),
+        # Spectral bandwidth stats (4)
+        safe_float(np.mean(spectral_bandwidth)), safe_float(np.std(spectral_bandwidth)),
+        safe_float(np.min(spectral_bandwidth)),  safe_float(np.max(spectral_bandwidth)),
+        # Spectral rolloff stats (4)
+        safe_float(np.mean(spectral_rolloff)), safe_float(np.std(spectral_rolloff)),
+        safe_float(np.min(spectral_rolloff)),  safe_float(np.max(spectral_rolloff)),
+        # Spectral flatness stats (2)
+        safe_float(np.mean(spectral_flatness)), safe_float(np.std(spectral_flatness)),
+        # Pitch (voiced frames) stats (4)
+        safe_float(np.mean(pitch_voiced)), safe_float(np.std(pitch_voiced)),
+        safe_float(np.min(pitch_voiced)),  safe_float(np.max(pitch_voiced)),
+        # Scalar features (4)
+        voiced_ratio, hnr_proxy, jitter, shimmer,
+        # Spectral entropy (1)
+        spectral_entropy,
+        # Duration (1)
+        safe_float(duration),
+    ]  # = 30 features
+
+    features.extend(prosodic)
+
+    # Ensure exactly 990 features
+    features = np.asarray(features, dtype=np.float64)
+    if features.size < EXPECTED_MFCC_FEATURES:
+        features = np.pad(features, (0, EXPECTED_MFCC_FEATURES - features.size))
+    else:
+        features = features[:EXPECTED_MFCC_FEATURES]
+
+    features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
+    np.clip(features, -1e9, 1e9, out=features)
+
+    # Build acoustic summary dict (for display purposes)
     acoustic = {
         "duration": round(duration, 1),
-        "avg_pitch": round(safe_float(np.mean(pitch), 0.0)),
-        "pitch_variability": safe_float(np.std(pitch), 0.0),
+        "avg_pitch": round(safe_float(np.mean(pitch_voiced), 0.0)),
+        "pitch_variability": safe_float(np.std(pitch_voiced), 0.0),
         "energy": safe_float(np.mean(rms), 0.0),
         "energy_std": safe_float(np.std(rms), 0.0),
         "zcr": safe_float(np.mean(zcr), 0.0),
         "spectral_centroid": safe_float(np.mean(spectral_centroid), 0.0),
         "spectral_bandwidth": safe_float(np.mean(spectral_bandwidth), 0.0),
-        "signal_quality": estimate_signal_quality(y, rms),
+        "signal_quality": _estimate_signal_quality(y, rms),
     }
 
     return features, acoustic
 
 
-def estimate_signal_quality(y, rms):
+def _estimate_signal_quality(y, rms):
     if y.size == 0:
         return 0
     clipping_ratio = float(np.mean(np.abs(y) > 0.98))
@@ -290,177 +438,304 @@ def estimate_signal_quality(y, rms):
     return int(max(40, min(99, round(score))))
 
 
-# Word sets used in training (from traditional_mlv59.py)
-_FIRST_PERSON = {'i', "i'm", "i've", "i'll", 'my', 'me', 'myself', 'mine'}
-_NEG_WORDS = {
-    'sad', 'depressed', 'tired', 'exhausted', 'hopeless', 'worthless', 'fail',
-    'alone', 'lonely', 'empty', 'anxious', 'worried', 'bad', 'worse', 'worst',
-    'never', 'nothing', 'nobody', 'cannot', 'cant', 'terrible', 'horrible',
-    'awful', 'miserable', 'dark', 'lost', 'numb',
-}
-_POS_WORDS = {
-    'happy', 'good', 'great', 'fine', 'well', 'okay', 'enjoy', 'love', 'nice',
-    'wonderful', 'better', 'best', 'glad', 'pleased', 'positive', 'excited',
-    'hopeful', 'energetic', 'motivated', 'content', 'peaceful',
-}
-_FILLER_WORDS = {'um', 'uh', 'like', 'hmm', 'yeah', 'okay', 'right', 'well', 'so'}
+# ── Prediction ────────────────────────────────────────────────────────────────
 
-
-def extract_linguistic_features(transcript: str) -> np.ndarray:
-    """Compute the same 25 linguistic features used at model training time.
-
-    For features that require structured interview data (turn latency, absolute
-    durations, turn counts) we use zero — the same value the model was implicitly
-    handling before — to avoid scale mismatches with the scaler trained on full
-    DAIC-WOZ data.  Only ratio-based features that can be reliably derived from
-    free text are computed from the transcript.
-
-    Feature order (must match training):
-      0  n_turns       1  n_w          2  uniq         3  ttr
-      4  avg_wpt       5  fp_r         6  ng_r         7  ps_r
-      8  ps/ng         9  fl_r         10 avg_lat      11 std_lat
-      12 max_lat       13 med_lat      14 tot_dur       15 avg_dur
-      16 std_dur       17 speech_rt    18 turn_rat      19 n_sents
-      20 avg_sl        21 std_sl       22 ng/fp         23 ng-ps
-      24 n_w/tot_dur
-    """
-    import re
-
-    text = transcript.strip().lower() if transcript else ""
-
-    # Start with all zeros — a safe neutral baseline that avoids scale issues.
-    feats = np.zeros(EXPECTED_LINGUISTIC_FEATURES, dtype=np.float64)
-
-    if not text:
-        return feats
-
-    words = text.split()
-    n_w = max(len(words), 1)
-    uniq = len(set(words))
-
-    fp_r = sum(1 for w in words if w in _FIRST_PERSON) / n_w
-    ng_r = sum(1 for w in words if w in _NEG_WORDS) / n_w
-    ps_r = sum(1 for w in words if w in _POS_WORDS) / n_w
-    fl_r = sum(1 for w in words if w in _FILLER_WORDS) / n_w
-    ttr = uniq / n_w
-    ps_ng_ratio = ps_r / max(ng_r + 1e-8, 1e-8)
-    ng_fp_ratio = ng_r / max(fp_r + 1e-8, 1e-8)
-    ng_minus_ps = ng_r - ps_r
-
-    sents = [s.strip() for s in re.split(r'[.!?]+', text) if s.strip()]
-    n_sents = max(len(sents), 1)
-    sl = [len(s.split()) for s in sents]
-    avg_sl = float(np.mean(sl)) if sl else float(n_w)
-    std_sl = float(np.std(sl)) if len(sl) > 1 else 0.0
-
-    # Proxy for avg words-per-turn using sentence structure
-    # (keep magnitude small: 1 turn ≈ 2 sentences, so similar to training data)
-    n_turns_proxy = max(1.0, n_sents / 2.0)
-    avg_wpt = float(n_w) / n_turns_proxy
-
-    # Ratio-safe features only — leave absolute duration/latency at zero
-    feats[1] = float(n_w)          # n_w    (word count, not duration)
-    feats[2] = float(uniq)         # uniq
-    feats[3] = ttr                 # ttr
-    feats[4] = avg_wpt             # avg_wpt (word-count proxy)
-    feats[5] = fp_r                # fp_r
-    feats[6] = ng_r                # ng_r
-    feats[7] = ps_r                # ps_r
-    feats[8] = ps_ng_ratio         # ps/ng
-    feats[9] = fl_r                # fl_r
-    # 10–18: latency / duration / speech_rt → leave as 0 (unknown from text)
-    feats[19] = float(n_sents)     # n_sents
-    feats[20] = avg_sl             # avg_sl
-    feats[21] = std_sl             # std_sl
-    feats[22] = ng_fp_ratio        # ng/fp
-    feats[23] = ng_minus_ps        # ng - ps
-    # feats[24]: n_w/tot_dur → leave 0 (tot_dur is unknown)
-
-    return feats
-
-
-
-def build_model_input(audio_features, linguistic_features=None, gender: float = NEUTRAL_GENDER_VALUE):
-    if linguistic_features is None:
-        linguistic_features = np.zeros(EXPECTED_LINGUISTIC_FEATURES, dtype=np.float64)
-    gender_feature = np.asarray([gender], dtype=np.float64)
-    raw = np.hstack([audio_features, linguistic_features, gender_feature]).reshape(1, -1)
-    raw = np.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
-    np.clip(raw, -1e6, 1e6, out=raw)
-    return raw
-
-
-def predict_audio(file_bytes, transcript: str = "", gender: str = "unknown"):
-    artifacts = load_model_artifacts()
-    audio_features, acoustic = extract_audio_features(file_bytes)
-    linguistic_features = extract_linguistic_features(transcript)
-    gender_map = {"male": 0.0, "female": 1.0, "m": 0.0, "f": 1.0}
-    gender_value = gender_map.get(gender.lower().strip(), NEUTRAL_GENDER_VALUE)
-    raw_input = build_model_input(audio_features, linguistic_features, gender_value)
-
-    feature_mask = artifacts["feature_mask"]
-    if raw_input.shape[1] != feature_mask.shape[0]:
-        raise RuntimeError(
-            f"Model feature shape mismatch: extractor returned {raw_input.shape[1]} "
-            f"features, model expects {feature_mask.shape[0]}."
-        )
-
-    selected = raw_input[:, feature_mask]
-    scaled = artifacts["scaler"].transform(selected)
-    pca_features = artifacts["pca"].transform(scaled)
-    probability = float(artifacts["model"].predict_proba(pca_features)[0][1])
-    probability = max(0.0, min(1.0, probability))
-
-    # Detect model saturation (due to feature scale mismatch) and apply calibrated fallback
-    if probability > 0.999 or probability < 0.001:
-        # Extract acoustic metrics
-        pitch_variability = acoustic.get("pitch_variability", 60.0)
-        spectral_centroid = acoustic.get("spectral_centroid", 1500.0)
-        zcr = acoustic.get("zcr", 0.08)
-        energy = acoustic.get("energy", 0.01)
-
-        # Heuristic scoring using standard clinic thresholds
-        score_pitch = (65.0 - pitch_variability) / 15.0
-        score_centroid = (1400.0 - spectral_centroid) / 400.0
-        score_zcr = (0.09 - zcr) / 0.03
-        score_energy = (0.012 - energy) / 0.005
-
-        # Incorporate linguistic features if transcript is provided
-        score_ling = 0.0
-        if transcript.strip():
-            words = transcript.lower().split()
-            if words:
-                n_w = len(words)
-                ng_r = sum(1 for w in words if w in _NEG_WORDS) / n_w
-                ps_r = sum(1 for w in words if w in _POS_WORDS) / n_w
-                score_ling = (ng_r - ps_r) * 8.0
-
-        raw_score = score_pitch + score_centroid + score_zcr + score_energy + score_ling
-        calibrated_prob = 1.0 / (1.0 + np.exp(-raw_score))
-        
-        # Clip probability between 0.08 and 0.92 for realistic display
-        probability = max(0.08, min(0.92, calibrated_prob))
-
+def _build_prediction_result(probability, threshold, model_name, source, scenario, note):
+    probability = max(0.0, min(1.0, safe_float(probability)))
+    predicted_label = int(probability >= threshold)
     depression = int(round(probability * 100))
     normal = 100 - depression
-    primary_detection = "Depression" if depression >= 50 else "Normal State"
+    primary_detection = "Depression" if predicted_label == 1 else "Normal State"
     confidence = depression if primary_detection == "Depression" else normal
 
     return {
+        "model": model_name,
+        "source": source,
+        "scenario": scenario,
         "primaryDetection": primary_detection,
         "confidence": confidence,
         "depression": depression,
         "normal": normal,
-        "acoustic": acoustic,
-        "features": audio_features,
         "probability": probability,
+        "threshold": threshold,
+        "status": "available",
+        "note": note,
     }
 
+
+def predict_machine_learning(file_bytes):
+    """
+    Run the XGB v95 pipeline on the uploaded audio.
+    The pipeline internally applies StandardScaler → PCA → XGBClassifier.
+    """
+    pipeline, threshold = load_model_pipeline()
+    mfcc_features, acoustic = extract_mfcc_features_990(file_bytes)
+
+    X = mfcc_features.reshape(1, -1)
+    probability = float(pipeline.predict_proba(X)[0][1])
+
+    result = _build_prediction_result(
+        probability=probability,
+        threshold=threshold,
+        model_name="Machine Learning - XGBoost v95",
+        source="Model/Machine Learning/best_XGB_S2_MFCC.pkl",
+        scenario="S2_MFCC",
+        note="XGBoost pipeline trained on 990 MFCC-derived acoustic features.",
+    )
+    result["acoustic"] = acoustic
+    return result
+
+
+def _normalize_feature(x):
+    mean = x.mean()
+    std = x.std()
+    if std < 1e-6:
+        return x - mean
+    return np.clip((x - mean) / std, -10.0, 10.0)
+
+
+def _pad_or_trim_2d(x, length, width):
+    x = np.asarray(x, dtype=np.float32)
+    if x.ndim != 2:
+        x = np.zeros((0, width), dtype=np.float32)
+    if x.shape[1] != width:
+        fixed = np.zeros((x.shape[0], width), dtype=np.float32)
+        fixed[:, : min(width, x.shape[1])] = x[:, : min(width, x.shape[1])]
+        x = fixed
+    if x.shape[0] > length:
+        return x[:length]
+    if x.shape[0] < length:
+        return np.vstack([x, np.zeros((length - x.shape[0], width), dtype=np.float32)])
+    return x
+
+
+def _pad_or_trim_1d(x, length):
+    x = np.asarray(x, dtype=np.float32).reshape(-1)
+    if x.size > length:
+        return x[:length]
+    if x.size < length:
+        return np.pad(x, (0, length - x.size)).astype(np.float32)
+    return x
+
+
+def extract_deep_learning_inputs(file_bytes):
+    y, sr = load_audio_signal(file_bytes)
+    if sr != 16000:
+        raise RuntimeError("Deep learning preprocessing expects 16 kHz audio.")
+
+    raw = _pad_or_trim_1d(y, DL_RAW_LEN)
+
+    frames = _frame_signal(raw, sr, frame_ms=25, hop_ms=32)
+    mfcc = _compute_mfcc_matrix(frames, sr, n_mfcc=40, n_fft=1024)
+    delta = _compute_delta(mfcc)
+    delta2 = _compute_delta(delta)
+    mfcc_seq = np.concatenate([mfcc, delta, delta2], axis=0).T
+    mfcc_seq = _pad_or_trim_2d(mfcc_seq, DL_MAX_MFCC_LEN, DL_MFCC_FEATURES)
+
+    spectrum = np.fft.rfft(frames, n=1024)
+    power = (np.abs(spectrum) ** 2) / 1024
+    filters = _mel_filterbank(sr, 1024, n_filters=DL_N_MELS)
+    mel_power = np.maximum(np.dot(power, filters.T), 1e-10)
+    spec_seq = (10.0 * np.log10(mel_power / np.max(mel_power))).astype(np.float32)
+    spec_seq = _pad_or_trim_2d(spec_seq, DL_MAX_SPEC_LEN, DL_N_MELS)
+
+    return (
+        _normalize_feature(mfcc_seq).astype(np.float32),
+        _normalize_feature(spec_seq).astype(np.float32),
+        _normalize_feature(raw).astype(np.float32),
+    )
+
+
+@lru_cache(maxsize=1)
+def load_deep_learning_model():
+    try:
+        import torch
+        import torch.nn as nn
+        from transformers import Wav2Vec2Model
+    except ImportError as exc:
+        raise RuntimeError("Deep learning dependencies are not installed. Install torch and transformers.") from exc
+
+    if not DL_MODEL_PATH.exists():
+        raise RuntimeError(f"Deep learning model file not found: {DL_MODEL_PATH}")
+
+    class FeatureAdapter(nn.Module):
+        def __init__(self, input_dim, output_dim=512, dropout=0.1):
+            super().__init__()
+            self.proj = nn.Sequential(
+                nn.Linear(input_dim, output_dim),
+                nn.LayerNorm(output_dim),
+                nn.GELU(),
+                nn.Dropout(dropout),
+            )
+
+        def forward(self, x):
+            return self.proj(x)
+
+    class FusionV4Model(nn.Module):
+        def __init__(self, dropout=0.5):
+            super().__init__()
+            self.wav2vec = Wav2Vec2Model.from_pretrained(
+                "facebook/wav2vec2-base",
+                cache_dir=str(HF_TRANSFORMERS_CACHE_DIR),
+                local_files_only=True,
+            )
+            self.mfcc_adapter = FeatureAdapter(DL_MFCC_FEATURES, 512, dropout=0.1)
+            self.spec_adapter = FeatureAdapter(DL_N_MELS, 512, dropout=0.1)
+
+            def projection():
+                return nn.Sequential(
+                    nn.Linear(768, 256),
+                    nn.LayerNorm(256),
+                    nn.GELU(),
+                    nn.Dropout(dropout),
+                )
+
+            self.raw_proj = projection()
+            self.mfcc_proj = projection()
+            self.spec_proj = projection()
+            self.fusion = nn.Sequential(
+                nn.LayerNorm(768),
+                nn.Linear(768, 256),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(256, 2),
+            )
+
+        def _encode_via_transformer(self, adapted):
+            hidden = self.wav2vec.feature_projection(adapted)
+            if isinstance(hidden, tuple):
+                hidden = hidden[0]
+            encoder_out = self.wav2vec.encoder(hidden)
+            last_hidden = (
+                encoder_out.last_hidden_state
+                if hasattr(encoder_out, "last_hidden_state")
+                else encoder_out[0]
+            )
+            return last_hidden.mean(dim=1)
+
+        def forward(self, mfcc, spec, wav):
+            e_raw = self.wav2vec(wav).last_hidden_state.mean(dim=1)
+            e_raw = self.raw_proj(e_raw)
+            e_mfcc = self._encode_via_transformer(self.mfcc_adapter(mfcc))
+            e_mfcc = self.mfcc_proj(e_mfcc)
+            e_spec = self._encode_via_transformer(self.spec_adapter(spec))
+            e_spec = self.spec_proj(e_spec)
+            return self.fusion(torch.cat([e_raw, e_mfcc, e_spec], dim=1))
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = FusionV4Model(dropout=0.5).to(device)
+    try:
+        checkpoint = torch.load(DL_MODEL_PATH, map_location=device, weights_only=True)
+    except TypeError:
+        checkpoint = torch.load(DL_MODEL_PATH, map_location=device)
+    if isinstance(checkpoint, dict):
+        state_dict = checkpoint.get("model_state_dict") or checkpoint.get("state_dict") or checkpoint
+    else:
+        state_dict = checkpoint
+    incompatible = model.load_state_dict(state_dict, strict=False)
+    if incompatible.unexpected_keys:
+        raise RuntimeError(
+            "Deep learning checkpoint has unexpected keys: "
+            + ", ".join(incompatible.unexpected_keys[:8])
+        )
+    model.eval()
+    return model, device
+
+
+def predict_deep_learning(file_bytes):
+    import torch
+    import torch.nn.functional as F
+
+    model, device = load_deep_learning_model()
+    mfcc, spec, wav = extract_deep_learning_inputs(file_bytes)
+    with torch.no_grad():
+        mfcc_t = torch.from_numpy(mfcc).unsqueeze(0).to(device)
+        spec_t = torch.from_numpy(spec).unsqueeze(0).to(device)
+        wav_t = torch.from_numpy(wav).unsqueeze(0).to(device)
+        logits = model(mfcc_t, spec_t, wav_t)
+        probability = float(F.softmax(logits.float(), dim=1)[0, 1].cpu().item())
+
+    return _build_prediction_result(
+        probability=probability,
+        threshold=DL_THRESHOLD,
+        model_name="Deep Learning - Fusion V4 Wav2Vec2",
+        source="Model/Deep Learning/v4_wav2vec_3f.pt",
+        scenario="MFCC + MelSpec + Raw Waveform",
+        note="Fusion V4 model using MFCC, mel-spectrogram, and raw waveform branches.",
+    )
+
+
+def unavailable_model_result(model_name, source, scenario, error):
+    return {
+        "model": model_name,
+        "source": source,
+        "scenario": scenario,
+        "status": "unavailable",
+        "error": str(error),
+        "primaryDetection": "Unavailable",
+        "confidence": 0,
+        "depression": 0,
+        "normal": 0,
+        "probability": None,
+        "threshold": None,
+    }
+
+
+def build_consensus_prediction(ml_result, dl_result):
+    available = [r for r in [ml_result, dl_result] if r.get("status") == "available"]
+    if not available:
+        raise RuntimeError("No prediction model is available.")
+
+    probability = float(np.mean([r["probability"] for r in available]))
+    result = _build_prediction_result(
+        probability=probability,
+        threshold=0.5,
+        model_name="Consensus ML + DL",
+        source="Machine Learning and Deep Learning models",
+        scenario="Average probability ensemble",
+        note="Consensus prediction averages all available model probabilities.",
+    )
+    result["modelCount"] = len(available)
+    return result
+
+
+def predict_audio(file_bytes):
+    ml_result = predict_machine_learning(file_bytes)
+    acoustic = ml_result["acoustic"]
+
+    try:
+        dl_result = predict_deep_learning(file_bytes)
+    except Exception as exc:
+        dl_result = unavailable_model_result(
+            model_name="Deep Learning - Fusion V4 Wav2Vec2",
+            source="Model/Deep Learning/v4_wav2vec_3f.pt",
+            scenario="MFCC + MelSpec + Raw Waveform",
+            error=exc,
+        )
+
+    consensus = build_consensus_prediction(ml_result, dl_result)
+    consensus["acoustic"] = acoustic
+
+    return {
+        "primaryDetection": consensus["primaryDetection"],
+        "confidence": consensus["confidence"],
+        "depression": consensus["depression"],
+        "normal": consensus["normal"],
+        "acoustic": acoustic,
+        "probability": consensus["probability"],
+        "modelResults": {
+            "machineLearning": ml_result,
+            "deepLearning": dl_result,
+            "consensus": consensus,
+        },
+    }
+
+
+# ── Database ──────────────────────────────────────────────────────────────────
 
 def init_database():
     if is_postgres_enabled():
         import psycopg
-
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -492,8 +767,6 @@ def init_database():
                 """
             )
     except Exception:
-        # Some serverless filesystems are read-only. Keep the app usable locally,
-        # but this fallback is not persistent and should not be used in production.
         pass
 
 
@@ -501,7 +774,6 @@ def save_analysis(result, audio_bytes, filename, media_type):
     if is_postgres_enabled():
         import psycopg
         from psycopg.types.json import Jsonb
-
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -516,13 +788,7 @@ def save_analysis(result, audio_bytes, filename, media_type):
                         audio_filename = EXCLUDED.audio_filename,
                         audio_media_type = EXCLUDED.audio_media_type
                     """,
-                    (
-                        result["id"],
-                        Jsonb(result),
-                        audio_bytes,
-                        filename,
-                        media_type,
-                    ),
+                    (result["id"], Jsonb(result), audio_bytes, filename, media_type),
                 )
         return
 
@@ -557,7 +823,6 @@ def save_analysis(result, audio_bytes, filename, media_type):
 def get_analysis(result_id):
     if is_postgres_enabled():
         import psycopg
-
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT result_json FROM analyses WHERE id = %s", (result_id,))
@@ -576,7 +841,6 @@ def get_analysis(result_id):
 def get_audio_record(result_id):
     if is_postgres_enabled():
         import psycopg
-
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -604,9 +868,12 @@ def get_audio_record(result_id):
 
 init_database()
 
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
 def get_wav_info(file_bytes):
     try:
-        with wave.open(io.BytesIO(file_bytes), 'rb') as wav:
+        with wave.open(io.BytesIO(file_bytes), "rb") as wav:
             frames = wav.getnframes()
             rate = wav.getframerate()
             duration = frames / float(rate)
@@ -624,6 +891,7 @@ def get_energy_level(energy):
 
 
 def build_explainability(prediction):
+    """Generate SHAP-like and LIME-like explainability based on acoustic features."""
     depression = prediction["depression"]
     acoustic = prediction["acoustic"]
     total_shift = float(depression - 50.0)
@@ -713,15 +981,15 @@ def build_explainability(prediction):
 
     return shap_features, lime_rules
 
+
+# ── API Endpoints ─────────────────────────────────────────────────────────────
+
 @app.post("/api/analyze")
 async def analyze_audio(
     file: UploadFile = File(...),
-    transcript: str = Form(""),
-    gender: str = Form("unknown"),
 ):
     result_id = str(uuid.uuid4())
 
-    # Read file content
     try:
         content = await file.read()
     except Exception as e:
@@ -734,7 +1002,7 @@ async def analyze_audio(
     media_type = get_media_type(stored_filename)
 
     try:
-        prediction = predict_audio(content, transcript=transcript, gender=gender)
+        prediction = predict_audio(content)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
@@ -749,14 +1017,17 @@ async def analyze_audio(
     avg_pitch = acoustic["avg_pitch"]
     energy_level = get_energy_level(acoustic["energy"])
     signal_quality = acoustic["signal_quality"]
-    
-    # Current date formatted
+
     now = datetime.datetime.now()
     date_str = now.strftime("%m/%d/%Y")
     timestamp_str = now.strftime("%m/%d/%Y, %I:%M:%S %p")
-    
-    base_value = 50.0 # 50% baseline
+
+    base_value = 50.0
     shap_features, lime_rules = build_explainability(prediction)
+    model_results = prediction["modelResults"]
+    ml_model = model_results["machineLearning"]
+    dl_model = model_results["deepLearning"]
+    consensus_model = model_results["consensus"]
 
     result = {
         "id": result_id,
@@ -767,37 +1038,62 @@ async def analyze_audio(
         "confidence": confidence,
         "metrics": {
             "depression": depression,
-            "normal": normal
+            "normal": normal,
         },
         "audioInfo": {
             "duration": f"{duration}s",
             "avgPitch": f"{avg_pitch} Hz",
             "energyLevel": energy_level,
             "signalQuality": f"{signal_quality}%",
-            "audioUrl": f"/api/audio/{result_id}"
+            "audioUrl": f"/api/audio/{result_id}",
         },
         "performance": {
-            "accuracy": "78.7%",
-            "precision": "N/A",
-            "f1Score": "76.3%"
+            "accuracy": "65.0%",
+            "precision": "65.2%",
+            "f1Score": "64.9%",
         },
         "shapData": {
             "baseValue": base_value,
             "predictionValue": float(depression),
-            "features": shap_features
+            "features": shap_features,
         },
         "limeRules": lime_rules,
+        "modelResults": model_results,
         "modelInfo": {
-            "name": "MLP v59",
-            "source": "Model/mlp_model.pkl",
+            "name": consensus_model["model"],
+            "source": consensus_model["source"],
+            "scenario": consensus_model["scenario"],
             "depressionProbability": round(prediction["probability"], 4),
-            "note": "Audio-only inference uses neutral placeholders for transcript and gender features."
-        }
+            "threshold": consensus_model["threshold"],
+            "machineLearning": {
+                "name": ml_model["model"],
+                "source": ml_model["source"],
+                "scenario": ml_model["scenario"],
+                "status": ml_model["status"],
+                "depressionProbability": round(ml_model["probability"], 4),
+                "threshold": ml_model["threshold"],
+            },
+            "deepLearning": {
+                "name": dl_model["model"],
+                "source": dl_model["source"],
+                "scenario": dl_model["scenario"],
+                "status": dl_model["status"],
+                "depressionProbability": (
+                    round(dl_model["probability"], 4)
+                    if dl_model.get("probability") is not None
+                    else None
+                ),
+                "threshold": dl_model["threshold"],
+                "error": dl_model.get("error"),
+            },
+            "note": consensus_model["note"],
+        },
     }
 
     save_analysis(result, content, file.filename or stored_filename, media_type)
-    
+
     return {"id": result_id}
+
 
 @app.get("/api/results/{result_id}")
 async def get_result(result_id: str):
@@ -805,6 +1101,7 @@ async def get_result(result_id: str):
     if not result:
         raise HTTPException(status_code=404, detail="Analysis result not found")
     return result
+
 
 @app.get("/api/audio/{result_id}")
 async def get_audio(result_id: str):

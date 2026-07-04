@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   Upload, CheckCircle, Shield, Zap, FileAudio, 
-  Loader2, Activity, ArrowRight, Trash2, Eye, MessageSquare, User
+  Loader2, ArrowRight, Trash2, Eye
 } from "lucide-react";
 import SectionContainer from "./SectionContainer";
 import { getApiUrl } from "../utils/api";
@@ -16,7 +16,7 @@ const features = [
   { icon: Zap, label: "Fast", color: "text-amber-500" },
 ];
 
-type UploadState = "idle" | "transcript_form" | "uploading" | "analyzing" | "has_result" | "error";
+type UploadState = "idle" | "file_ready" | "uploading" | "analyzing" | "has_result" | "error";
 
 interface SummaryData {
   id: string;
@@ -27,6 +27,23 @@ interface SummaryData {
   topFeature?: string;
 }
 
+interface ShapFeature {
+  name: string;
+  value: number;
+  featureValue: string;
+}
+
+interface ResultResponse {
+  id: string;
+  filename: string;
+  primaryDetection: string;
+  confidence: number;
+  date: string;
+  shapData?: {
+    features?: ShapFeature[];
+  };
+}
+
 export default function UploadSection() {
   const router = useRouter();
   const [state, setState] = useState<UploadState>("idle");
@@ -35,15 +52,14 @@ export default function UploadSection() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [activeResult, setActiveResult] = useState<SummaryData | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
-  const [transcript, setTranscript] = useState("");
-  const [gender, setGender] = useState("unknown");
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Helper to get top feature from SHAP
-  const getTopFeature = (json: any) => {
-    if (json?.shapData?.features?.length > 0) {
-      const sorted = [...json.shapData.features].sort((a: any, b: any) => Math.abs(b.value) - Math.abs(a.value));
+  const getTopFeature = (json: ResultResponse) => {
+    const features = json.shapData?.features ?? [];
+    if (features.length > 0) {
+      const sorted = [...features].sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
       return `${sorted[0].name} (${sorted[0].featureValue})`;
     }
     return "Pitch Variability (11.2 Hz)";
@@ -84,7 +100,7 @@ export default function UploadSection() {
               // Clear invalid storage if backend says 404
               localStorage.removeItem("mindvoice_active_result_id");
             }
-          } catch (err) {
+          } catch {
             // Fallback load mock if backend is offline but key exists
             setActiveResult({
               id: activeId,
@@ -117,7 +133,7 @@ export default function UploadSection() {
       : `${(file.size / 1024).toFixed(0)} KB`;
     setFileSize(sizeStr);
     setPendingFile(file);
-    setState("transcript_form");
+    setState("file_ready");
   };
 
   const handleConfirmAnalysis = async () => {
@@ -217,8 +233,6 @@ export default function UploadSection() {
     try {
       const uploadFile = await prepareAudioForUpload(file);
       formData.append("file", uploadFile);
-      formData.append("transcript", transcript.trim());
-      formData.append("gender", gender);
 
       const response = await fetch(getApiUrl("/api/analyze"), {
         method: "POST",
@@ -256,8 +270,6 @@ export default function UploadSection() {
     setState("idle");
     setActiveResult(null);
     setErrorMessage("");
-    setTranscript("");
-    setGender("unknown");
     setPendingFile(null);
   };
 
@@ -344,9 +356,9 @@ export default function UploadSection() {
               </motion.div>
             )}
 
-            {state === "transcript_form" && (
+            {state === "file_ready" && (
               <motion.div
-                key="transcript_form"
+                key="file_ready"
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
@@ -360,51 +372,6 @@ export default function UploadSection() {
                   <div className="min-w-0">
                     <p className="text-sm font-bold text-text truncate">{fileName}</p>
                     <p className="text-xs text-text-muted">{fileSize}</p>
-                  </div>
-                </div>
-
-                {/* Transcript input */}
-                <div className="space-y-2">
-                  <label className="flex items-center gap-2 text-sm font-bold text-text">
-                    <MessageSquare size={15} className="text-primary" />
-                    Transkripsi Audio
-                    <span className="ml-1 px-2 py-0.5 rounded-full bg-bg text-[10px] text-text-muted border border-border-light font-medium">Opsional — meningkatkan akurasi</span>
-                  </label>
-                  <textarea
-                    id="transcript-input"
-                    rows={4}
-                    value={transcript}
-                    onChange={(e) => setTranscript(e.target.value)}
-                    placeholder="Ketik atau tempel teks dari audio di sini... Contoh: 'Akhir-akhir ini saya merasa sangat lelah dan tidak bersemangat. Tidur saya juga tidak teratur.'"
-                    className="w-full resize-none rounded-xl border border-border-light bg-bg p-3.5 text-sm text-text placeholder:text-text-light focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50 transition-all leading-relaxed"
-                  />
-                  <p className="text-[11px] text-text-light leading-relaxed">
-                    Transkripsi membantu model menghitung fitur linguistik (kata negatif/positif, filler words, dll.) yang digunakan saat training. Tanpa transkripsi, fitur ini akan menggunakan nilai estimasi.
-                  </p>
-                </div>
-
-                {/* Gender selector */}
-                <div className="space-y-2">
-                  <label className="flex items-center gap-2 text-sm font-bold text-text">
-                    <User size={15} className="text-primary" />
-                    Gender Pembicara
-                  </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(["male", "female", "unknown"] as const).map((g) => (
-                      <button
-                        key={g}
-                        id={`gender-${g}`}
-                        type="button"
-                        onClick={() => setGender(g)}
-                        className={`py-2.5 rounded-xl text-sm font-semibold border transition-all ${
-                          gender === g
-                            ? "gradient-bg text-white border-transparent shadow"
-                            : "bg-bg text-text-muted border-border-light hover:border-primary/30"
-                        }`}
-                      >
-                        {g === "male" ? "Male" : g === "female" ? "Female" : "Unknown"}
-                      </button>
-                    ))}
                   </div>
                 </div>
 
@@ -506,8 +473,6 @@ export default function UploadSection() {
                     setState("idle");
                     setErrorMessage("");
                     setPendingFile(null);
-                    setTranscript("");
-                    setGender("unknown");
                     if (fileInputRef.current) {
                       fileInputRef.current.value = "";
                     }
