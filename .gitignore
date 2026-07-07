@@ -50,3 +50,65 @@ backend/.hf_cache/
 
 *.pt
 Model/Deep Learning/
+
+@'
+# Python
+.venv/
+venv/
+ENV/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+*.db
+*.sqlite
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+build/
+.cache/
+.turbo/
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Project specific
+uploads/
+public/uploads/
+backend/mindvoice.db
+backend/uploads/
+.cache
+temp/
+tmp/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+lerna-debug.log*
+'@ | Out-File -Encoding UTF8 .gitignore
