@@ -1,0 +1,145 @@
+{
+  "model": "ML_Fusion_RF",
+  "n_samples_shap": 500,
+  "threshold": 0.37000000000000005,
+  "expected_val_depresi": 0.5004332002817568,
+  "layer1_group": {
+    "MelSpec": {
+      "contribution_pct": 23.29,
+      "mean_shap": -0.000237,
+      "direction": "NORMAL"
+    },
+    "MFCC": {
+      "contribution_pct": 12.76,
+      "mean_shap": -0.000178,
+      "direction": "NORMAL"
+    },
+    "Wav2Vec": {
+      "contribution_pct": 63.95,
+      "mean_shap": -0.00011,
+      "direction": "NORMAL"
+    }
+  },
+  "layer2_subgroup": {
+    "MelSpec_subgroups": {
+      "Low freq (band 1-32)": {
+        "contribution_pct": 5.44,
+        "direction": "NORMAL"
+      },
+      "Mid freq (band 33-80)": {
+        "contribution_pct": 6.93,
+        "direction": "NORMAL"
+      },
+      "High freq (band 81-128)": {
+        "contribution_pct": 10.91,
+        "direction": "NORMAL"
+      }
+    },
+    "MFCC_subgroups": {
+      "MFCC Base (C1-C40)": {
+        "contribution_pct": 8.01,
+        "direction": "NORMAL"
+      },
+      "MFCC Delta": {
+        "contribution_pct": 2.35,
+        "direction": "NORMAL"
+      },
+      "MFCC Delta2": {
+        "contribution_pct": 2.39,
+        "direction": "NORMAL"
+      }
+    },
+    "Wav2Vec_top10": [
+      {
+        "dim": 215,
+        "global_dim": 463,
+        "mean_abs_shap": 0.006631,
+        "direction": "NORMAL"
+      },
+      {
+        "dim": 541,
+        "global_dim": 789,
+        "mean_abs_shap": 0.005896,
+        "direction": "NORMAL"
+      },
+      {
+        "dim": 123,
+        "global_dim": 371,
+        "mean_abs_shap": 0.005708,
+        "direction": "NORMAL"
+      },
+      {
+        "dim": 537,
+        "global_dim": 785,
+        "mean_abs_shap": 0.005608,
+        "direction": "NORMAL"
+      },
+      {
+        "dim": 759,
+        "global_dim": 1007,
+        "mean_abs_shap": 0.003502,
+        "direction": "NORMAL"
+      },
+      {
+        "dim": 53,
+        "global_dim": 301,
+        "mean_abs_shap": 0.003502,
+        "direction": "NORMAL"
+      },
+      {
+        "dim": 481,
+        "global_dim": 729,
+        "mean_abs_shap": 0.00348,
+        "direction": "NORMAL"
+      },
+      {
+        "dim": 708,
+        "global_dim": 956,
+        "mean_abs_shap": 0.003446,
+        "direction": "NORMAL"
+      },
+      {
+        "dim": 112,
+        "global_dim": 360,
+        "mean_abs_shap": 0.003404,
+        "direction": "NORMAL"
+      },
+      {
+        "dim": 353,
+        "global_dim": 601,
+        "mean_abs_shap": 0.003108,
+        "direction": "NORMAL"
+      }
+    ]
+  },
+  "layer3_waterfall_sample": {
+    "sample_idx": 0,
+    "true_label": "DEPRESI",
+    "predicted_prob_depresi": 0.3375,
+    "top15_features": [
+      {
+        "rank": 1,
+        "feature_name": "MelSpec_band001",
+        "feature_group": "MelSpec",
+        "feature_sub": "Mel Band 1",
+        "feature_idx": 0,
+        "shap_value": 0.000205,
+        "feature_value_scaled": 0.8926,
+        "direction": "DEPRESI",
+        "magnitude": 0.000205
+      },
+      {
+        "rank": 2,
+        "feature_name": "MelSpec_band002",
+        "feature_group": "MelSpec",
+        "feature_sub": "Mel Band 2",
+        "feature_idx": 1,
+        "shap_value": -0.000205,
+        "feature_value_scaled": 0.2784,
+        "direction": "NORMAL",
+        "magnitude": 0.000205
+      }
+    ]
+  },
+  "layer4_text": "Pola embedding suara mendalam (Wav2Vec) menjadi faktor utama (64.0%) yang mendorong prediksi ke arah NORMAL. Koefisien cepstral dasar (MFCC) menunjukkan karakteristik timbre dan kualitas vokal. Distribusi energi frekuensi tidak menunjukkan pola kuat ke arah depresi."
+}

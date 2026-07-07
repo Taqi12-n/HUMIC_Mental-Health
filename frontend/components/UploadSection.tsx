@@ -212,7 +212,7 @@ export default function UploadSection() {
     const AudioContextClass = window.AudioContext || browserWindow.webkitAudioContext;
 
     if (!AudioContextClass) {
-      throw new Error("Browser tidak mendukung konversi audio. Silakan gunakan file WAV.");
+      throw new Error("Your browser does not support audio conversion. Please use a WAV file.");
     }
 
     const audioContext = new AudioContextClass();
@@ -257,7 +257,7 @@ export default function UploadSection() {
       setErrorMessage(
         error instanceof Error
           ? error.message
-          : "Audio tidak bisa diproses. Silakan coba file WAV, MP3, atau M4A lain."
+          : "Audio could not be processed. Please try a different WAV, MP3, or M4A file."
       );
       setState("error");
     }
@@ -386,7 +386,7 @@ export default function UploadSection() {
                     }}
                     className="flex-1 py-3 rounded-full border border-border bg-white text-text font-bold text-sm hover:bg-bg transition-colors"
                   >
-                    Ganti File
+                    Choose Another File
                   </button>
                   <button
                     id="confirm-analyze-btn"
@@ -394,7 +394,7 @@ export default function UploadSection() {
                     onClick={handleConfirmAnalysis}
                     className="flex-[2] inline-flex items-center justify-center gap-2 py-3 rounded-full gradient-bg text-white font-bold text-sm shadow hover:scale-[1.02] transition-transform"
                   >
-                    Analisis Sekarang
+                    Analyze Now
                     <ArrowRight size={16} />
                   </button>
                 </div>
@@ -436,9 +436,9 @@ export default function UploadSection() {
                 className="border border-border-light rounded-2xl p-10 text-center"
               >
                 <Loader2 size={36} className="text-primary animate-spin mx-auto mb-4" />
-                <h4 className="font-semibold text-text mb-2">Analyzing Voice Patterns...</h4>
+                <h4 className="font-semibold text-text mb-2">Analyzing your voice...</h4>
                 <p className="text-xs text-text-muted max-w-xs mx-auto leading-relaxed">
-                  Extracting acoustic features and comparing predictions across Machine Learning and Deep Learning models.
+                  The AI is reviewing your speech to find the clearest signal in the recording.
                 </p>
                 
                 <div className="flex items-center justify-center gap-1.5 h-8 mt-6">
@@ -534,7 +534,7 @@ export default function UploadSection() {
                     className="flex-1 inline-flex items-center justify-center gap-1.5 py-3 rounded-full border border-border bg-white text-text font-bold text-sm hover:bg-bg transition-colors"
                   >
                     <Trash2 size={16} className="text-text-muted" />
-                    New Audio
+                    Upload New Audio
                   </button>
                 </div>
               </motion.div>

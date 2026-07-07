@@ -7,27 +7,27 @@ import SectionContainer from "./SectionContainer";
 const features = [
   {
     icon: AudioLines,
-    title: "Audio-Based Detection",
+    title: "Voice Analysis",
     description:
-      "Analyze vocal biomarkers and speech patterns to identify mental health indicators with high precision.",
+      "Detects early signs from your voice recording and presents them in a clear, easy-to-read report.",
   },
   {
     icon: GitCompareArrows,
-    title: "ML vs DL Comparison",
+    title: "Model Comparison",
     description:
-      "Compare machine learning and deep learning model results side by side for comprehensive analysis.",
+      "Shows comparison details when available so you can see how the AI reached the result.",
   },
   {
     icon: Eye,
-    title: "XAI Visualization",
+    title: "Clear Explanation",
     description:
-      "Explainable AI visualizations help understand which audio features drive the model predictions.",
+      "Explains the main result in plain language for non-technical users.",
   },
   {
     icon: TrendingUp,
-    title: "Confidence Analytics",
+    title: "Confidence Score",
     description:
-      "Detailed confidence scores and analytics dashboard for each prediction across multiple models.",
+      "A simple percentage showing how strongly the AI stands behind its result.",
   },
 ];
 
@@ -42,7 +42,7 @@ export default function Features() {
           transition={{ duration: 0.5 }}
           className="text-3xl sm:text-4xl font-extrabold text-text mb-3"
         >
-          Feature Highlights
+          What this tool gives you
         </motion.h2>
         <motion.p
           initial={{ opacity: 0, y: 15 }}
@@ -51,7 +51,7 @@ export default function Features() {
           transition={{ duration: 0.5, delay: 0.1 }}
           className="text-text-muted text-base max-w-md mx-auto"
         >
-          Powerful tools designed for accurate mental health voice analysis
+          Simple, helpful insights from your voice recording, made for everyday users.
         </motion.p>
       </div>
 

@@ -10,21 +10,21 @@ const steps = [
     icon: Upload,
     title: "Upload Audio",
     description:
-      "Upload your voice recording in WAV or MP3 format. Our system accepts recordings of any length.",
+      "Upload a voice recording in WAV or MP3 format. The system accepts recordings of any length.",
   },
   {
     number: 2,
     icon: Cpu,
     title: "AI Analysis",
     description:
-      "Advanced ML and DL models analyze vocal patterns, tone variations, and acoustic features in real-time.",
+      "The AI checks your vocal features and finds the patterns most relevant to this result.",
   },
   {
     number: 3,
     icon: BarChart3,
     title: "Get Insights",
     description:
-      "Receive detailed mental health insights with confidence scores, visualizations, and actionable recommendations.",
+      "Get clear results with confidence levels, visuals, and simple next-step suggestions.",
   },
 ];
 
@@ -48,7 +48,7 @@ export default function HowItWorks() {
           transition={{ duration: 0.5, delay: 0.1 }}
           className="text-text-muted text-base max-w-md mx-auto"
         >
-          Three simple steps to analyze your mental health through voice
+          Three simple steps to learn what your voice may be signaling.
         </motion.p>
       </div>
 

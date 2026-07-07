@@ -8,17 +8,17 @@ import Link from "next/link";
 import XaiSection from "@/components/XaiSection";
 import { getApiUrl } from "@/utils/api";
 
-// Fallback mockup matching reference specifications
+// Fallback mockup matching Final Model (ML_Fusion_RF) response format
 const fallbackData = {
   id: "fallback-mock-id",
   filename: "mental_health_sample.wav",
   date: "5/13/2026",
   timestamp: "5/13/2026, 11:02:50 PM",
-  primaryDetection: "Depression",
-  confidence: 78,
+  primaryDetection: "DEPRESI",
+  confidence: 60,
   metrics: {
-    depression: 78,
-    normal: 22
+    depression: 60,
+    normal: 40
   },
   audioInfo: {
     duration: "45.0s",
@@ -27,16 +27,17 @@ const fallbackData = {
     signalQuality: "94%"
   },
   performance: {
-    accuracy: "65.0%",
-    precision: "65.2%",
-    f1Score: "64.9%"
-  }
+    testF1: "70%",
+    threshold: 0.37,
+  },
+  // shapExplanation intentionally empty to show NoShapFallback in XaiSection
+  shapExplanation: null,
 };
 
 function AiInsightContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const resultId = searchParams.get("id");
+  const resultId = searchParams?.get("id");
 
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -77,7 +78,7 @@ function AiInsightContent() {
     return (
       <div className="min-h-[60vh] flex flex-col items-center justify-center p-4">
         <RefreshCw className="animate-spin text-primary mb-4" size={32} />
-        <p className="text-text-muted font-medium">Loading Explainable AI (XAI) models...</p>
+        <p className="text-text-muted font-medium">Loading the AI explanation...</p>
       </div>
     );
   }
@@ -114,19 +115,26 @@ function AiInsightContent() {
       {/* Page Title & Breadcrumbs */}
       <div>
         <div className="flex items-center gap-2 text-xs font-semibold text-text-muted mb-2">
-          <span>AI Insight Panel</span>
-          <span>•</span>
-          <span>SHAP & LIME Interpretability</span>
+          <span>AI Insight</span>
           {data.filename && (
             <>
               <span>•</span>
               <span className="text-primary truncate max-w-[150px]">{data.filename}</span>
             </>
           )}
+          {data.date && (
+            <>
+              <span>•</span>
+              <span>{data.date}</span>
+            </>
+          )}
         </div>
-        <h2 className="text-2xl sm:text-3xl font-extrabold text-text mb-1">Explainable AI Insights</h2>
-        <p className="text-text-muted text-sm sm:text-base">
-          Detailed breakdown of acoustic biomarker contributions driving the model's prediction
+        <h2 className="text-2xl sm:text-3xl font-extrabold text-text mb-1">
+          Why did the AI produce this result?
+        </h2>
+        <p className="text-text-muted text-sm sm:text-base max-w-3xl">
+          This page explains exactly how the AI analyzed your voice and what signals led to the result. 
+          We use <strong>SHAP (SHapley Additive exPlanations)</strong> to break down each feature's contribution in plain language.
         </p>
       </div>
 
@@ -136,7 +144,7 @@ function AiInsightContent() {
       {/* Bottom Nav Links */}
       <div className="flex flex-col sm:flex-row gap-3 pt-4 justify-between items-center border-t border-border-light">
         <p className="text-xs text-text-muted leading-relaxed text-center sm:text-left">
-          These interpretations are generated locally. Read the descriptions inside the Biomarker Dictionary to understand the clinical significance of each factor.
+          This summary is simplified for easier understanding. Open the details section if you want to see the technical information.
         </p>
         <div className="flex gap-3 w-full sm:w-auto shrink-0 mt-3 sm:mt-0">
           <Link

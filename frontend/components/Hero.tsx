@@ -50,21 +50,19 @@ export default function Hero() {
             >
               <Activity size={14} className="text-primary" />
               <span className="text-xs font-semibold text-primary">
-                Research-Grade AI Analysis
+                Friendly Voice Insight
               </span>
             </motion.div>
 
             <h1 className="text-4xl sm:text-5xl lg:text-[3.5rem] font-extrabold text-text leading-[1.1] tracking-tight mb-6">
-              Detect Mental Health
+              Learn what your voice
               <br />
-              Patterns Through{" "}
-              <span className="gradient-text">Voice</span>
+              may be signaling
             </h1>
 
             <p className="text-base sm:text-lg text-text-muted leading-relaxed mb-8 max-w-lg">
-              Advanced AI-powered voice analysis to detect mental health patterns
-              with research-grade accuracy. Upload audio and get instant
-              insights.
+              Simple AI-powered voice analysis that explains possible mental
+              health patterns and helps you understand what comes next.
             </p>
 
             <div className="flex flex-wrap gap-3">
@@ -124,21 +122,21 @@ export default function Hero() {
                     <BarChart3 size={14} className="text-primary" />
                   </div>
                   <p className="text-lg font-bold text-text">99.9%</p>
-                  <p className="text-[11px] text-text-muted">Accuracy</p>
+                  <p className="text-[11px] text-text-muted">Trusted signal</p>
                 </div>
                 <div className="bg-bg rounded-xl p-3 text-center">
                   <div className="flex items-center justify-center mb-1">
                     <Activity size={14} className="text-secondary" />
                   </div>
                   <p className="text-lg font-bold text-text">1,247</p>
-                  <p className="text-[11px] text-text-muted">Processed</p>
+                  <p className="text-[11px] text-text-muted">Analyses done</p>
                 </div>
                 <div className="bg-bg rounded-xl p-3 text-center">
                   <div className="flex items-center justify-center mb-1">
                     <Cpu size={14} className="text-primary" />
                   </div>
                   <p className="text-lg font-bold text-text">2</p>
-                  <p className="text-[11px] text-text-muted">Models</p>
+                  <p className="text-[11px] text-text-muted">AI layers</p>
                 </div>
               </div>
             </div>
