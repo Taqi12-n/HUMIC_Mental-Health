@@ -393,6 +393,9 @@ def load_fusion_model():
     threshold = float(data.get("threshold", MODEL_THRESHOLD))
     return pipeline, threshold, data
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 @lru_cache(maxsize=1)
 def load_wav2vec_model():
