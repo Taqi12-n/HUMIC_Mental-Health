@@ -106,9 +106,8 @@ function ModelMetricsCard({ modelInfo, segmentInfo, performance }: {
             </p>
           </div>
         </div>
-        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-100 text-[10px] font-bold text-emerald-700">
-          <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-          Active
+        <div>
+          <div />
         </div>
       </div>
 

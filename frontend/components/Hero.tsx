@@ -105,8 +105,7 @@ export default function Hero() {
                     Audio Analysis
                   </span>
                 </div>
-                <span className="px-3 py-1 rounded-full bg-green-50 text-green-600 text-xs font-semibold border border-green-100">
-                  Active
+                <span>
                 </span>
               </div>
 

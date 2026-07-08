@@ -2,5 +2,25 @@
 setlocal
 
 set "ROOT=%~dp0"
-start "MindVoice Backend" cmd /k "cd /d ""%ROOT%backend"" && call ""%ROOT%.venv\Scripts\python.exe"" -m uvicorn main:app --reload --host 127.0.0.1 --port 8000"
-start "MindVoice Frontend" cmd /k "cd /d ""%ROOT%frontend"" && npm run dev"
+
+echo ============================================
+echo           Starting MindVoice AI
+echo ============================================
+
+REM ============================
+REM Backend
+REM ============================
+
+start "MindVoice Backend" cmd.exe /k ^
+cd /d "%ROOT%backend" ^&^& ^
+"%ROOT%.venv\Scripts\python.exe" -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+
+REM ============================
+REM Frontend
+REM ============================
+
+start "MindVoice Frontend" cmd.exe /k ^
+cd /d "%ROOT%frontend" ^&^& ^
+npm run dev
+
+exit

@@ -299,7 +299,12 @@ def generate_fallback_shap(probability: float, prediction_label: str) -> dict:
     }
 
 
-HF_CACHE_DIR = Path(__file__).resolve().parent / ".hf_cache"
+HF_CACHE_DIR = Path(
+    os.getenv(
+        "HF_HOME",
+        Path(__file__).resolve().parent / ".hf_cache"
+    )
+)
 HF_TRANSFORMERS_CACHE_DIR = HF_CACHE_DIR / "transformers"
 os.environ.setdefault("HF_HOME", str(HF_CACHE_DIR))
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
