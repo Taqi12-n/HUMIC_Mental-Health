@@ -38,6 +38,15 @@ import warnings
 
 import numpy as np
 
+_cached_pipeline = None
+_cached_threshold = None
+_cached_model_data = None
+
+_cached_w2v_model = None
+_cached_w2v_processor = None
+
+_cached_shap = None
+
 warnings.filterwarnings(
     "ignore",
     message="Passing `gradient_checkpointing` to a config initialization is deprecated.*",
@@ -373,36 +382,43 @@ def safe_float(value, default=0.0):
 
 @lru_cache(maxsize=1)
 def load_fusion_model():
-    """Load ML_Fusion_RF model dari pkl. Pipeline: StandardScaler + RF."""
-    try:
-        import joblib
-    except ImportError as exc:
-        raise RuntimeError("joblib is not installed. Run: pip install joblib") from exc
+    global _cached_pipeline
+    global _cached_threshold
+    global _cached_model_data
 
-    if not MODEL_PKL_PATH.exists():
-        raise RuntimeError(
-            f"Final model tidak ditemukan: {MODEL_PKL_PATH}\n"
-            "Pastikan file ml_fusion_rf.pkl ada di folder 'Model/Final model/'."
+    if _cached_pipeline is not None:
+        return (
+            _cached_pipeline,
+            _cached_threshold,
+            _cached_model_data,
         )
+
+    import joblib
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         data = joblib.load(MODEL_PKL_PATH)
 
-    pipeline = data["pipeline"]         # sklearn Pipeline (StandardScaler + RF)
-    threshold = float(data.get("threshold", MODEL_THRESHOLD))
-    return pipeline, threshold, data
+    _cached_pipeline = data["pipeline"]
+    _cached_threshold = float(data.get("threshold", MODEL_THRESHOLD))
+    _cached_model_data = data
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+    return (
+        _cached_pipeline,
+        _cached_threshold,
+        _cached_model_data,
+    )
 
 @lru_cache(maxsize=1)
 def load_wav2vec_model():
     """Load Wav2Vec2 model dan processor. Dipanggil sekali saat startup."""
     from transformers import Wav2Vec2Model, Wav2Vec2Processor
     import traceback
+    global _cached_w2v_model
+    global _cached_w2v_processor
 
+    if _cached_w2v_model is not None:
+        return _cached_w2v_model, _cached_w2v_processor
     print("=" * 80)
     print(f"Loading Wav2Vec2 model: {WAV2VEC_MODEL_NAME}")
     print(f"HF cache dir: {HF_TRANSFORMERS_CACHE_DIR}")
@@ -435,8 +451,10 @@ def load_wav2vec_model():
     except Exception:
         pass
 
-    return model, processor
+    _cached_w2v_model = model
+    _cached_w2v_processor = processor
 
+    return model, processor
 
 @lru_cache(maxsize=1)
 def load_shap_explainer():
