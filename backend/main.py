@@ -401,23 +401,40 @@ def health():
 def load_wav2vec_model():
     """Load Wav2Vec2 model dan processor. Dipanggil sekali saat startup."""
     from transformers import Wav2Vec2Model, Wav2Vec2Processor
+    import traceback
+
+    print("=" * 80)
     print(f"Loading Wav2Vec2 model: {WAV2VEC_MODEL_NAME}")
     print(f"HF cache dir: {HF_TRANSFORMERS_CACHE_DIR}")
-    
-    processor = Wav2Vec2Processor.from_pretrained(
-        WAV2VEC_MODEL_NAME,
-        cache_dir=str(HF_TRANSFORMERS_CACHE_DIR),
-    )
-    model = Wav2Vec2Model.from_pretrained(
-        WAV2VEC_MODEL_NAME,
-        cache_dir=str(HF_TRANSFORMERS_CACHE_DIR),
-    )
+
+    try:
+        processor = Wav2Vec2Processor.from_pretrained(
+            WAV2VEC_MODEL_NAME,
+            cache_dir=str(HF_TRANSFORMERS_CACHE_DIR),
+        )
+
+        print("✅ Processor loaded")
+
+        model = Wav2Vec2Model.from_pretrained(
+            WAV2VEC_MODEL_NAME,
+            cache_dir=str(HF_TRANSFORMERS_CACHE_DIR),
+        )
+
+        print("✅ Model loaded")
+
+    except Exception as e:
+        print("❌ ERROR saat load Wav2Vec2")
+        traceback.print_exc()
+        raise
+
     model.eval()
+
     try:
         import torch
         model.to(DEVICE)
     except Exception:
         pass
+
     return model, processor
 
 
