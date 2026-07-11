@@ -5,9 +5,9 @@
 
 # MindVoice AI
 
-MindVoice AI is a web-based platform for early depression prediction from speech recordings using a Machine Learning Fusion model combined with Explainable Artificial Intelligence (XAI).
+MindVoice AI is a research-based web platform developed under the **HUMIC (Human-Centric Engineering Research Center), Telkom University**. The platform is designed to support early depression prediction from speech recordings by combining a Machine Learning Fusion model with Explainable Artificial Intelligence (XAI).
 
-The system extracts multiple speech representations (Mel Spectrogram, MFCC, and Wav2Vec2 embeddings), fuses them into a single feature vector, performs depression prediction using a Random Forest classifier, and explains every prediction using SHAP (SHapley Additive exPlanations).
+The system extracts multiple speech representations (Mel Spectrogram, MFCC, and Wav2Vec2 embeddings), fuses them into a single feature vector, performs depression prediction using a Random Forest classifier, and provides interpretable explanations using SHAP (SHapley Additive exPlanations).
 
 > **Disclaimer**
 >
@@ -42,7 +42,11 @@ MindVoice-AI/
 ├── .gitignore
 └── README.md
 ```
+# About HUMIC
 
+HUMIC (Human-Centric Engineering Research Center) is a research center at **Telkom University** focusing on the development of intelligent technologies that enhance human well-being through Artificial Intelligence, Machine Learning, Human-Computer Interaction, and Digital Health research.
+
+MindVoice AI was developed as one of the research implementations within HUMIC to explore speech-based depression prediction combined with Explainable Artificial Intelligence (XAI).
 ---
 
 # Technology Stack
@@ -337,6 +341,8 @@ GET /api/audio/{result_id}
 
 ---
 
-# License
+# Acknowledgements
 
-This project was developed for academic research purposes as part of an undergraduate thesis at **Telkom University**.
+This project was developed under the guidance of researchers from **HUMIC (Human-Centric Engineering Research Center), Telkom University**.
+
+The web platform, machine learning integration, explainable AI implementation, and documentation were further developed as part of an undergraduate research project.
