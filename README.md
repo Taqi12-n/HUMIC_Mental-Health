@@ -157,7 +157,7 @@ git --version
 ## 1. Clone Repository
 
 ```bash
-git clone https://github.com/<your-username>/MindVoice-AI.git
+git clone https://github.com/<your-username>/HUMIC_Mental-Health.git
 ```
 
 Replace `<your-username>` with your GitHub username.
