@@ -40,18 +40,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-node_modules/
-.next/
-
-backend/mindvoice.db
-backend/.hf_cache/
-*.db
-*.sqlite3
-
-*.pt
-Model/Deep Learning/
-
-@'
 # Python
 .venv/
 venv/
@@ -65,25 +53,28 @@ dist/
 build/
 *.egg
 .pytest_cache/
-*.db
-*.sqlite
 
-# Node
+# Database & Cache
+*.db
+*.sqlite3
+backend/mindvoice.db
+backend/.hf_cache/
+
+# Node (redundant but explicit)
 node_modules/
 .next/
-out/
-dist/
-build/
-.cache/
-.turbo/
-pnpm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
-# Environment variables
-.env
-.env.local
-.env.*.local
+# Model files
+*.pt
+Model/Deep Learning/
+
+# Project specific
+uploads/
+public/uploads/
+backend/uploads/
+.cache
+temp/
+tmp/
 
 # IDE
 .vscode/
@@ -91,24 +82,12 @@ yarn-error.log*
 *.swp
 *.swo
 *~
-.DS_Store
-
-# Project specific
-uploads/
-public/uploads/
-backend/mindvoice.db
-backend/uploads/
-.cache
-temp/
-tmp/
 
 # OS
 Thumbs.db
-.DS_Store
 
 # Logs
 logs/
 *.log
-npm-debug.log*
 lerna-debug.log*
-'@ | Out-File -Encoding UTF8 .gitignore
+backend/.hf_cache/

@@ -943,63 +943,74 @@ def explain_prediction_shap(
 # ── Main prediction ────────────────────────────────────────────────────────────
 
 def predict_audio(file_bytes: bytes) -> dict:
-    """
-    Pipeline utama: audio bytes → JSON prediksi lengkap.
 
-    1. Load audio → 16kHz mono
-    2. VAD segmentation
-    3. Ekstrak MelSpec + MFCC + Wav2Vec per segmen → fusion 1016-dim
-    4. RF predict_proba → threshold → majority voting
-    5. SHAP explanation 4 layer
-    6. Acoustic summary
-    """
+    print("STEP 1 - Load Fusion")
     pipeline, threshold, model_data = load_fusion_model()
+
+    print("STEP 2 - Load W2V")
     w2v_model, w2v_processor = load_wav2vec_model()
+
+    print("STEP 3 - Load SHAP")
     shap_explainer = load_shap_explainer()
 
-    # Load audio
+    print("STEP 4 - Load Audio")
     audio = load_audio_from_bytes(file_bytes)
+
+    print("STEP 5 - Acoustic")
     acoustic = build_acoustic_summary(audio)
 
-    # VAD segmentation
+    print("STEP 6 - VAD")
     segments = vad_segmentation(audio)
-    if not segments:
-        raise ValueError("Tidak ada segmen audio terdeteksi. Upload audio dengan konten bicara.")
 
-    # Feature extraction per segmen
+    print(f"STEP 7 - Found {len(segments)} segments")
+
     fusion_vectors = []
     segment_detail = []
 
     for i, seg in enumerate(segments):
-        seg_dur = len(seg) / SAMPLE_RATE
+
+        print(f"===== Segment {i+1} =====")
 
         mel = extract_melspec(seg)
-        mel_vec = mean_pool(mel, "melspec")  # (128,)
+        print("Mel selesai")
+        mel_vec = mean_pool(mel, "melspec")
 
         mfcc = extract_mfcc_delta(seg)
-        mfcc_vec = mean_pool(mfcc, "mfcc")  # (120,)
+        print("MFCC selesai")
+        mfcc_vec = mean_pool(mfcc, "mfcc")
 
+        print("Sebelum Wav2Vec")
         w2v = extract_wav2vec(seg, w2v_model, w2v_processor)
+        print("Sesudah Wav2Vec")
+
         if w2v is None:
             continue
-        w2v_vec = mean_pool(w2v, "wav2vec")  # (768,)
+
+        w2v_vec = mean_pool(w2v, "wav2vec")
 
         fusion = np.concatenate([mel_vec, mfcc_vec, w2v_vec]).astype(np.float64)
+
         fusion_vectors.append(fusion)
         segment_detail.append({
             "segment_index": i + 1,
-            "duration_sec": round(seg_dur, 2),
+            "duration_sec": round(len(seg) / SAMPLE_RATE, 2),
             "feature_dim": int(fusion.shape[0]),
         })
 
     if not fusion_vectors:
         raise ValueError("Semua segmen gagal diekstrak fiturnya (Wav2Vec error).")
 
-    # Prediksi per segmen
-    X = np.vstack(fusion_vectors)           # (N, 1016)
+        # Prediksi per segmen
+    print("--------------------")
+    print("fusion_vectors :", len(fusion_vectors))
+    print("segment_detail :", len(segment_detail))
+    print("--------------------")
+    X = np.vstack(fusion_vectors)
+    print(X.shape)           # (N, 1016)
     probs = pipeline.predict_proba(X)[:, 1]  # P(DEPRESI) per segmen
     preds = (probs >= threshold).astype(int)
-
+    print("preds :", len(preds))
+    print("probs :", len(probs))
     for i, (pred, prob) in enumerate(zip(preds, probs)):
         segment_detail[i]["pred_label"] = CLASS_NAMES[int(pred)]
         segment_detail[i]["prob_depresi"] = round(float(prob), 4)
@@ -1024,11 +1035,20 @@ def predict_audio(file_bytes: bytes) -> dict:
     # SHAP explanation must be local to this audio. Do not fall back to the
     # packaged global artifact here, because that repeats the same contribution
     # percentages across different recordings.
+    print("====================================")
+    print("Before SHAP")
+    print("====================================")
+
     shap_result = explain_prediction_shap(
         pipeline=pipeline,
         X_raw=X,
         shap_explainer=shap_explainer,
     )
+
+    print("====================================")
+    print("After SHAP")
+    print("====================================")
+
     if shap_result.get("error") or not shap_result.get("layer1_group"):
         raise RuntimeError(
             f"Gagal menghitung XAI lokal untuk audio ini: {shap_result.get('error', 'hasil SHAP tidak lengkap')}"
